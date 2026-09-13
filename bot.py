@@ -39,15 +39,14 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# ================= دالة مساعدة ذكية لتوزيع الأزرار لمنع قص النصوص =================
+# ================= دالة مساعدة لتوزيع الأزرار شبكياً بدون قص النصوص =================
 def chunk_buttons(buttons, n=2):
-    """توزيع مرن: الزر ذو النص الطويل يأخذ صفاً كاملاً لتفادي قطع الكتابة"""
     grid = []
     temp_row = []
     for btn in buttons:
         btn_text = getattr(btn, "text", "")
-        # إذا كان النص يتجاوز 15 حرفاً يوضع في سطر مستقل لضمان وضوح كامل النص
-        if len(btn_text) > 15:
+        # إذا كان النص طويلاً يُفرد له سطر مستقل لمنع اقتطاعه في شاشات الموبايل
+        if len(btn_text) > 16:
             if temp_row:
                 grid.append(temp_row)
                 temp_row = []
@@ -615,27 +614,27 @@ class ClientStates(StatesGroup):
     wait_product_search = State()
 
 
-# ================= لوحات =================
+# ================= لوحات مع استرجاع كامل للألوان =================
 def main_kb(uid):
     kb = [
         [
-            types.KeyboardButton(text="🛍️ قسم الخدمات"),
-            types.KeyboardButton(text="💰 حسابي ورصيدي"),
+            types.KeyboardButton(text="🛍️ قسم الخدمات", style="primary"),
+            types.KeyboardButton(text="💰 حسابي ورصيدي", style="success"),
         ],
         [
-            types.KeyboardButton(text="🔍 بحث عن منتج"),
-            types.KeyboardButton(text="⭐ المفضلة"),
+            types.KeyboardButton(text="🔍 بحث عن منتج", style="primary"),
+            types.KeyboardButton(text="⭐ المفضلة", style="success"),
         ],
         [
-            types.KeyboardButton(text="➕ شحن الرصيد"),
-            types.KeyboardButton(text="📋 طلباتي"),
-            types.KeyboardButton(text="📞 التواصل مع الدعم"),
+            types.KeyboardButton(text="➕ شحن الرصيد", style="success"),
+            types.KeyboardButton(text="📋 طلباتي", style="primary"),
+            types.KeyboardButton(text="📞 التواصل مع الدعم", style="danger"),
         ]
     ]
 
     if is_admin(uid):
         kb.append([
-            types.KeyboardButton(text="⚙️ لوحة الإدارة")
+            types.KeyboardButton(text="⚙️ لوحة الإدارة", style="primary")
         ])
 
     return types.ReplyKeyboardMarkup(
@@ -649,38 +648,38 @@ def admin_kb():
     margin = get_margin_percent()
     kb = [
         [
-            types.KeyboardButton(text="➕ إضافة قسم رئيسي"),
-            types.KeyboardButton(text="🗑️ إزالة قسم رئيسي")
+            types.KeyboardButton(text="➕ إضافة قسم رئيسي", style="success"),
+            types.KeyboardButton(text="🗑️ إزالة قسم رئيسي", style="danger")
         ],
         [
-            types.KeyboardButton(text="➕ إضافة لعبة لقسم"),
-            types.KeyboardButton(text="🗑️ إزالة لعبة من قسم")
+            types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"),
+            types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")
         ],
         [
-            types.KeyboardButton(text="➕ إضافة منتجات للعبة (بالآيدي)"),
-            types.KeyboardButton(text="🗑️ حذف منتج من لعبة")
+            types.KeyboardButton(text="➕ إضافة منتجات للعبة (بالآيدي)", style="success"),
+            types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")
         ],
         [
-            types.KeyboardButton(text="➕ إضافة رصيد لعميل"),
-            types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل")
+            types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"),
+            types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")
         ],
         [
-            types.KeyboardButton(text=f"📈 تعديل أسعار المتجر ({margin:g}%)"),
-            types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}")
+            types.KeyboardButton(text=f"📈 تعديل أسعار المتجر ({margin:g}%)", style="primary"),
+            types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger")
         ],
         [
-            types.KeyboardButton(text="👤 إضافة أدمن جديد"),
-            types.KeyboardButton(text="🚫 إزالة أدمن")
+            types.KeyboardButton(text="👤 إضافة أدمن جديد", style="primary"),
+            types.KeyboardButton(text="🚫 إزالة أدمن", style="danger")
         ],
         [
-            types.KeyboardButton(text="💳 إدارة طرق الدفع"),
-            types.KeyboardButton(text="📋 الطلبات الكلية")
+            types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"),
+            types.KeyboardButton(text="📋 الطلبات الكلية", style="primary")
         ],
         [
-            types.KeyboardButton(text="📊 إحصائيات المتجر"),
-            types.KeyboardButton(text="📢 إرسال رسالة للكل")
+            types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary"),
+            types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary")
         ],
-        [types.KeyboardButton(text="🔙 رجوع للرئيسية")]
+        [types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
     ]
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -729,7 +728,7 @@ async def fetch_product(pid):
     return None
 
 
-# ================= دالة التحقق الشاملة من الحقول المطلوبة =================
+# ================= دالة التحقق من الحقول المطلوبة =================
 def required_params(data):
     if not isinstance(data, dict):
         return []
@@ -790,7 +789,7 @@ def db_product_data(row):
         return {"name": row[0] if row else "", "description": row[7] if row else "", "product_type": row[6] if row else ""}
 
 
-# ================= المهمة التلقائية (كل 12 ساعة إرسال PDF) =================
+# ================= المهمة التلقائية لإرسال PDF كل 12 ساعة =================
 async def auto_send_deposits_pdf_task():
     while True:
         await asyncio.sleep(12 * 3600)
@@ -806,7 +805,7 @@ async def auto_send_deposits_pdf_task():
             print(f"⚠️ خطأ أثناء إرسال تقرير الـ PDF التلقائي: {e}")
 
 
-# ================= معالج عام لإلغاء الشراء أو الرجوع في أي وقت =================
+# ================= معالج عام لإلغاء أي عملية =================
 @dp.message(F.text == "🔙 إلغاء الشراء")
 async def cancel_any_action(message: types.Message, state: FSMContext):
     await state.clear()
@@ -826,7 +825,7 @@ async def start(message: types.Message, state: FSMContext):
         message.from_user.username or message.from_user.first_name or ""
     )
     kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[[types.InlineKeyboardButton(text="✅ أوافق", callback_data="agree_policy")]]
+        inline_keyboard=[[types.InlineKeyboardButton(text="✅ أوافق", callback_data="agree_policy", style="success")]]
     )
     await safe_send(
         message.from_user.id,
@@ -846,10 +845,13 @@ async def agree(cb: types.CallbackQuery):
         inline_keyboard=[
             [types.InlineKeyboardButton(
                 text="📢 قناة البوت",
-                url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}"
+                url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}",
+                style="primary"
             )],
             [types.InlineKeyboardButton(
-                text="🔄 تحقق من الاشتراك", callback_data="check_sub"
+                text="🔄 تحقق من الاشتراك",
+                callback_data="check_sub",
+                style="success"
             )]
         ]
     )
@@ -866,8 +868,8 @@ async def agree(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(cb: types.CallbackQuery):
     try:
-        member = await bot.get_chat_member(CHANNEL_USERNAME, cb.from_user.id)
-        # التحقق الدقيق من رتبة المستخدم في القناة
+        # فحص حالة العضو في القناة
+        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=cb.from_user.id)
         if member.status in ("member", "administrator", "creator"):
             await safe_answer(cb, "✅ تم التحقق من الاشتراك بنجاح!")
             try:
@@ -881,10 +883,15 @@ async def check_sub(cb: types.CallbackQuery):
             )
         else:
             await cb.answer("❌ لم تقم بالاشتراك في القناة بعد! اشترك ثم اضغط تحقق.", show_alert=True)
-    except Exception as err:
-        # في حال كان البوت ليس مشرفاً في القناة
-        print(f"⚠️ خطأ أثناء التحقق من القناة: {err}")
-        await cb.answer("⚠️ يرجى التأكد من رفع البوت كمشرف في القناة للتحقق من الأعضاء.", show_alert=True)
+    except TelegramBadRequest as e:
+        err_msg = str(e).lower()
+        if "chat not found" in err_msg or "member list is inaccessible" in err_msg or "user not found" in err_msg:
+            # إذا لم يكن البوت آدمن في القناة لتتبع الأعضاء
+            await cb.answer("⚠️ يرجى التأكد من إضافة البوت كـ Admin داخل القناة @SARE3_STOR أولاً!", show_alert=True)
+        else:
+            await cb.answer("❌ لم تقم بالاشتراك في القناة بعد!", show_alert=True)
+    except Exception:
+        await cb.answer("❌ تعذر التحقق حالياً، تأكد من اشتراكك بالقناة وحاول مجدداً.", show_alert=True)
 
 
 @dp.message(F.text == "🔙 رجوع للرئيسية")
@@ -926,7 +933,7 @@ async def contact_support(message: types.Message):
 async def search_product_start(message: types.Message, state: FSMContext):
     await state.clear()
     cancel_kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء")]],
+        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]],
         resize_keyboard=True
     )
     await safe_send(
@@ -965,16 +972,16 @@ async def search_product_execute(message: types.Message, state: FSMContext):
     btn_list = []
     for pid, name, base_price in rows:
         p_final = apply_margin(base_price)
-        btn_list.append(types.InlineKeyboardButton(text=f"📦 {name} (${p_final:.4f})", callback_data=f"show_{pid}"))
+        btn_list.append(types.InlineKeyboardButton(text=f"📦 {name} (${p_final:.4f})", callback_data=f"show_{pid}", style="primary"))
     
     keyboard = chunk_buttons(btn_list, 2)
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
-    # إرجاع لوحة المفاتيح الرئيسية للعميل مباشرة لتفادي تعليق زر إلغاء الشراء
+    # إرجاع لوحة المفاتيح الرئيسية تلقائياً وإلغاء كيبورد إلغاء الشراء
     await safe_send(message.from_user.id, f"🔍 <b>نتائج البحث عن:</b> {esc(query)}", reply_markup=main_kb(message.from_user.id))
-    await safe_send(message.from_user.id, "اختر المنتج المراد عرضه من الأزرار أدناه:", reply_markup=kb)
+    await safe_send(message.from_user.id, "اختر المنتج الذي ترغب به من القائمة:", reply_markup=kb)
 
 
-# ================= قائمة المفضلة (Wishlist) =================
+# ================= قائمة المفضلة =================
 @dp.message(F.text == "⭐ المفضلة")
 async def show_wishlist(message: types.Message):
     conn = db()
@@ -996,8 +1003,8 @@ async def show_wishlist(message: types.Message):
         if p_row:
             name = p_row[0]
             keyboard.append([
-                types.InlineKeyboardButton(text=f"📦 {name}", callback_data=f"show_{pid}"),
-                types.InlineKeyboardButton(text="🗑️ إزالة", callback_data=f"delwish_{pid}")
+                types.InlineKeyboardButton(text=f"📦 {name}", callback_data=f"show_{pid}", style="primary"),
+                types.InlineKeyboardButton(text="🗑️ إزالة", callback_data=f"delwish_{pid}", style="danger")
             ])
         else:
             conn = db()
@@ -1097,7 +1104,7 @@ async def admin_statistics(message: types.Message):
             text += f"▪️ {uname_str} (<code>{uid}</code>) — أضاف <b>{amt}</b> ({created_at})\n"
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📥 تحميل تقرير PDF الشامل", callback_data="download_pdf_report")]
+        [types.InlineKeyboardButton(text="📥 تحميل تقرير PDF الشامل", callback_data="download_pdf_report", style="success")]
     ])
 
     await safe_send(message.from_user.id, text, reply_markup=kb)
@@ -1126,7 +1133,7 @@ async def broadcast_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     cancel_kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء")]],
+        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]],
         resize_keyboard=True
     )
     await safe_send(
@@ -1282,8 +1289,8 @@ def build_admin_orders_view(page=1, player_search=None):
         text = "⚠️ لا توجد أي طلبات مسجلة حالياً." if not player_search else f"⚠️ لم يتم العثور على طلبات للـ Player ID: <code>{esc(player_search)}</code>"
         kb = types.InlineKeyboardMarkup(
             inline_keyboard=[
-                [types.InlineKeyboardButton(text="🔍 بحث حسب Player ID", callback_data="admin_search_pid")],
-                [types.InlineKeyboardButton(text="🔙 إلغاء البحث", callback_data="admin_orders_page_1")]
+                [types.InlineKeyboardButton(text="🔍 بحث حسب Player ID", callback_data="admin_search_pid", style="primary")],
+                [types.InlineKeyboardButton(text="🔙 إلغاء البحث", callback_data="admin_orders_page_1", style="danger")]
             ]
         )
         return text, kb
@@ -1331,17 +1338,17 @@ def build_admin_orders_view(page=1, player_search=None):
     p_param = f"_{urllib.parse.quote(player_search)}" if player_search else ""
 
     if page > 1:
-        nav_btns.append(types.InlineKeyboardButton(text="⬅️ السابق", callback_data=f"admin_orders_page_{page-1}{p_param}"))
+        nav_btns.append(types.InlineKeyboardButton(text="⬅️ السابق", callback_data=f"admin_orders_page_{page-1}{p_param}", style="primary"))
     if page < total_pages:
-        nav_btns.append(types.InlineKeyboardButton(text="التالي ➡️", callback_data=f"admin_orders_page_{page+1}{p_param}"))
+        nav_btns.append(types.InlineKeyboardButton(text="التالي ➡️", callback_data=f"admin_orders_page_{page+1}{p_param}", style="primary"))
 
     inline_keyboard = []
     if nav_btns:
         inline_keyboard.append(nav_btns)
 
-    inline_keyboard.append([types.InlineKeyboardButton(text="🔍 بحث حسب Player ID", callback_data="admin_search_pid")])
+    inline_keyboard.append([types.InlineKeyboardButton(text="🔍 بحث حسب Player ID", callback_data="admin_search_pid", style="primary")])
     if player_search:
-        inline_keyboard.append([types.InlineKeyboardButton(text="🔄 إلغاء التصفية (عرض الكل)", callback_data="admin_orders_page_1")])
+        inline_keyboard.append([types.InlineKeyboardButton(text="🔄 إلغاء التصفية (عرض الكل)", callback_data="admin_orders_page_1", style="danger")])
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
     return text, kb
@@ -1380,7 +1387,7 @@ async def admin_search_pid_cb(cb: types.CallbackQuery, state: FSMContext):
     await safe_answer(cb)
 
     cancel_kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء")]],
+        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]],
         resize_keyboard=True
     )
     await safe_send(cb.from_user.id, "أرسل الـ Player ID المراد البحث عنه:", reply_markup=cancel_kb)
@@ -1412,7 +1419,8 @@ async def show_cats(message: types.Message):
     btn_list = [
         types.InlineKeyboardButton(
             text=f"{clean_name(name)}",
-            callback_data=f"maincat_{cid}"
+            callback_data=f"maincat_{cid}",
+            style="success"
         )
         for cid, name in rows
     ]
@@ -1434,7 +1442,7 @@ async def back_cats(cb: types.CallbackQuery):
         return await cb.answer("لا توجد أقسام.", show_alert=True)
     
     btn_list = [
-        types.InlineKeyboardButton(text=f"{clean_name(name)}", callback_data=f"maincat_{cid}")
+        types.InlineKeyboardButton(text=f"{clean_name(name)}", callback_data=f"maincat_{cid}", style="success")
         for cid, name in rows
     ]
     keyboard = chunk_buttons(btn_list, 2)
@@ -1464,7 +1472,7 @@ async def show_subs(cb: types.CallbackQuery):
 
     rows = subs(cid)
     if not rows:
-        keyboard = [[types.InlineKeyboardButton(text="🔙 رجوع للأقسام", callback_data="back_to_main_cats")]]
+        keyboard = [[types.InlineKeyboardButton(text="🔙 رجوع للأقسام", callback_data="back_to_main_cats", style="danger")]]
         kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
         try:
             return await cb.message.edit_text(
@@ -1476,11 +1484,11 @@ async def show_subs(cb: types.CallbackQuery):
             return
 
     btn_list = [
-        types.InlineKeyboardButton(text=f"{clean_name(name)}", callback_data=f"gamesub_{sid}")
+        types.InlineKeyboardButton(text=f"{clean_name(name)}", callback_data=f"gamesub_{sid}", style="primary")
         for sid, name in rows
     ]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للأقسام", callback_data="back_to_main_cats")])
+    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للأقسام", callback_data="back_to_main_cats", style="danger")])
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     try:
@@ -1508,7 +1516,7 @@ async def show_products(cb: types.CallbackQuery):
 
     rows = products(sid)
     if not rows:
-        keyboard = [[types.InlineKeyboardButton(text="🔙 رجوع للقسم", callback_data=f"maincat_{row[1]}")]]
+        keyboard = [[types.InlineKeyboardButton(text="🔙 رجوع للقسم", callback_data=f"maincat_{row[1]}", style="danger")]]
         kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
         try:
             return await cb.message.edit_text(
@@ -1520,11 +1528,11 @@ async def show_products(cb: types.CallbackQuery):
             return
 
     btn_list = [
-        types.InlineKeyboardButton(text=f"▪️ {name}", callback_data=f"show_{pid}_{sid}")
+        types.InlineKeyboardButton(text=f"▪️ {name}", callback_data=f"show_{pid}_{sid}", style="primary")
         for pid, name in rows
     ]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للقسم", callback_data=f"maincat_{row[1]}")])
+    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للقسم", callback_data=f"maincat_{row[1]}", style="danger")])
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     try:
@@ -1586,15 +1594,15 @@ async def show_product(cb: types.CallbackQuery):
 
     keyboard = []
     if available:
-        keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"buy_{pid}")])
+        keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"buy_{pid}", style="success")])
     
     if in_wish:
-        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}")])
+        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}", style="danger")])
     else:
-        keyboard.append([types.InlineKeyboardButton(text="⭐ إضافة للمفضلة", callback_data=f"addwish_{pid}")])
+        keyboard.append([types.InlineKeyboardButton(text="⭐ إضافة للمفضلة", callback_data=f"addwish_{pid}", style="success")])
 
     if sid:
-        keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للمنتجات", callback_data=f"gamesub_{sid}")])
+        keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للمنتجات", callback_data=f"gamesub_{sid}", style="danger")])
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     
@@ -1615,7 +1623,7 @@ async def next_buy_step(user_id: int, state: FSMContext):
 
     if idx < len(params):
         cancel_kb = types.ReplyKeyboardMarkup(
-            keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء")]],
+            keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]],
             resize_keyboard=True
         )
         text = f"👉 أرسل <b>{esc(params[idx])}</b> المطلوبة الآن:"
@@ -1645,8 +1653,8 @@ async def next_buy_step(user_id: int, state: FSMContext):
     )
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text="🚀 تأكيد وإرسال الطلب", callback_data="confirm_api_order")],
-            [types.InlineKeyboardButton(text="❌ إلغاء الطلب", callback_data="cancel_order")]
+            [types.InlineKeyboardButton(text="🚀 تأكيد وإرسال الطلب", callback_data="confirm_api_order", style="success")],
+            [types.InlineKeyboardButton(text="❌ إلغاء الطلب", callback_data="cancel_order", style="danger")]
         ]
     )
     
@@ -1692,11 +1700,11 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
     if str(ptype).lower() == "amount":
         if qtys_from_desc:
             btn_list = [
-                types.InlineKeyboardButton(text=f"{q:g}", callback_data=f"setqty_{q}")
+                types.InlineKeyboardButton(text=f"{q:g}", callback_data=f"setqty_{q}", style="primary")
                 for q in qtys_from_desc
             ]
             keyboard = chunk_buttons(btn_list, 3)
-            keyboard.append([types.InlineKeyboardButton(text="❌ إلغاء", callback_data="cancel_order")])
+            keyboard.append([types.InlineKeyboardButton(text="❌ إلغاء", callback_data="cancel_order", style="danger")])
             
             kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
             try:
@@ -1711,7 +1719,7 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
             return
         else:
             cancel_kb = types.ReplyKeyboardMarkup(
-                keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء")]],
+                keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]],
                 resize_keyboard=True
             )
             await state.set_state(ClientStates.wait_for_qty)
@@ -1941,11 +1949,8 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
             res_data.get("order_id") or
             res_data.get("order_uuid") or 
             res_data.get("orderUuid") or 
-            res_data.get("uuid") or 
             res.get("order_id") or
             res.get("order_uuid") or 
-            res.get("orderUuid") or 
-            res.get("uuid") or 
             fallback_ouuid
         )
 
@@ -2055,10 +2060,17 @@ async def deposit_menu(message: types.Message, state: FSMContext):
         if code in ("sham_usd", "sham_syp"):
             has_sham = True
             continue
-        keyboard.append([types.InlineKeyboardButton(text=f"💳 {name}", callback_data=f"pay_{code}")])
+        
+        style = "primary"
+        if code == "syriatel":
+            style = "danger"
+        elif code in ("bep20", "binance"):
+            style = "success"
+            
+        keyboard.append([types.InlineKeyboardButton(text=f"💳 {name}", callback_data=f"pay_{code}", style=style)])
     
     if has_sham:
-        keyboard.append([types.InlineKeyboardButton(text="💳 شام كاش", callback_data="pay_sham_menu")])
+        keyboard.append([types.InlineKeyboardButton(text="💳 شام كاش", callback_data="pay_sham_menu", style="primary")])
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     await safe_send(
@@ -2073,9 +2085,9 @@ async def pay_sham_menu(cb: types.CallbackQuery):
     await safe_answer(cb)
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text="💵 شام كاش دولار", callback_data="pay_sham_usd")],
-            [types.InlineKeyboardButton(text="💷 شام كاش ليرة سورية", callback_data="pay_sham_syp")],
-            [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="back_to_pay_menu")]
+            [types.InlineKeyboardButton(text="💵 شام كاش دولار", callback_data="pay_sham_usd", style="primary")],
+            [types.InlineKeyboardButton(text="💷 شام كاش ليرة سورية", callback_data="pay_sham_syp", style="primary")],
+            [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="back_to_pay_menu", style="danger")]
         ]
     )
     try:
@@ -2100,9 +2112,16 @@ async def back_to_pay_menu(cb: types.CallbackQuery):
         if code in ("sham_usd", "sham_syp"):
             has_sham = True
             continue
-        keyboard.append([types.InlineKeyboardButton(text=f"💳 {name}", callback_data=f"pay_{code}")])
+        
+        style = "primary"
+        if code == "syriatel":
+            style = "danger"
+        elif code in ("bep20", "binance"):
+            style = "success"
+            
+        keyboard.append([types.InlineKeyboardButton(text=f"💳 {name}", callback_data=f"pay_{code}", style=style)])
     if has_sham:
-        keyboard.append([types.InlineKeyboardButton(text="💳 شام كاش", callback_data="pay_sham_menu")])
+        keyboard.append([types.InlineKeyboardButton(text="💳 شام كاش", callback_data="pay_sham_menu", style="primary")])
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     try:
         await cb.message.edit_text("💳 <b>اختر وسيلة الدفع للشحن:</b>", reply_markup=kb, parse_mode="HTML")
@@ -2136,8 +2155,8 @@ async def pay_info(cb: types.CallbackQuery, state: FSMContext):
 
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text="✅ أرسل بيانات التحويل", callback_data="verify_pay")],
-            [types.InlineKeyboardButton(text="❌ إلغاء", callback_data="cancel_pay")]
+            [types.InlineKeyboardButton(text="✅ أرسل بيانات التحويل", callback_data="verify_pay", style="success")],
+            [types.InlineKeyboardButton(text="❌ إلغاء", callback_data="cancel_pay", style="danger")]
         ]
     )
     try:
@@ -2172,7 +2191,7 @@ async def verify_pay(cb: types.CallbackQuery, state: FSMContext):
     await safe_answer(cb)
     
     cancel_kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء")]],
+        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]],
         resize_keyboard=True
     )
     
@@ -2236,9 +2255,9 @@ async def dep_amount(message: types.Message, state: FSMContext):
 
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text="✅ موافق (تحديد المبلغ بالدولار)", callback_data=f"admd_acc_{message.from_user.id}")],
-            [types.InlineKeyboardButton(text="❌ غير موافق", callback_data=f"admd_rej_{message.from_user.id}")],
-            [types.InlineKeyboardButton(text="👤 رؤية الملف الشخصي", url=f"tg://user?id={message.from_user.id}")]
+            [types.InlineKeyboardButton(text="✅ موافق (تحديد المبلغ بالدولار)", callback_data=f"admd_acc_{message.from_user.id}", style="success")],
+            [types.InlineKeyboardButton(text="❌ غير موافق", callback_data=f"admd_rej_{message.from_user.id}", style="danger")],
+            [types.InlineKeyboardButton(text="👤 رؤية الملف الشخصي", url=f"tg://user?id={message.from_user.id}", style="primary")]
         ]
     )
 
@@ -2622,22 +2641,26 @@ def build_payment_manage_kb():
         keyboard.append([
             types.InlineKeyboardButton(
                 text=f"{status_icon} {name}",
-                callback_data=f"togglepay_{code}"
+                callback_data=f"togglepay_{code}",
+                style="primary"
             ),
             types.InlineKeyboardButton(
                 text=f"✏️ تعديل",
-                callback_data=f"editpay_{code}"
+                callback_data=f"editpay_{code}",
+                style="success"
             ),
             types.InlineKeyboardButton(
                 text=f"🗑️ حذف",
-                callback_data=f"delpay_{code}"
+                callback_data=f"delpay_{code}",
+                style="danger"
             )
         ])
     
     keyboard.append([
         types.InlineKeyboardButton(
             text="➕ إضافة طريقة دفع جديدة",
-            callback_data="add_new_payment"
+            callback_data="add_new_payment",
+            style="success"
         )
     ])
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -2665,7 +2688,7 @@ async def add_new_payment_start(cb: types.CallbackQuery, state: FSMContext):
         return await safe_answer(cb, "غير مصرح.", True)
     await safe_answer(cb)
     cancel_kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء")]],
+        keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]],
         resize_keyboard=True
     )
     await safe_send(
@@ -2889,7 +2912,7 @@ async def cat_delete_start(message: types.Message):
         return await safe_send(message.from_user.id, "❌ لا توجد أقسام.")
     
     btn_list = [
-        types.InlineKeyboardButton(text=f"🗑️ {name}", callback_data=f"delcat_{cid}")
+        types.InlineKeyboardButton(text=f"🗑️ {name}", callback_data=f"delcat_{cid}", style="danger")
         for cid, name in rows
     ]
     keyboard = chunk_buttons(btn_list, 2)
@@ -2929,9 +2952,9 @@ async def sub_add_start(message: types.Message, state: FSMContext):
     if not rows:
         return await safe_send(message.from_user.id, "❌ أضف قسم أولاً.")
     
-    btn_list = [types.KeyboardButton(text=f"📂 {clean_name(name)}") for cid, name in rows]
+    btn_list = [types.KeyboardButton(text=f"📂 {clean_name(name)}", style="primary") for cid, name in rows]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية")])
+    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")])
     kb = types.ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     
     await safe_send(message.from_user.id, "اختر القسم:", reply_markup=kb)
@@ -2981,7 +3004,7 @@ async def sub_delete_start(message: types.Message):
     if not is_admin(message.from_user.id):
         return
     btn_list = [
-        types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"seldelsub_{cid}")
+        types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"seldelsub_{cid}", style="primary")
         for cid, name in categories()
     ]
     keyboard = chunk_buttons(btn_list, 2)
@@ -3005,7 +3028,7 @@ async def sub_delete_list(cb: types.CallbackQuery):
             return
     
     btn_list = [
-        types.InlineKeyboardButton(text=f"🎮 {name}", callback_data=f"delsub_{sid}")
+        types.InlineKeyboardButton(text=f"🎮 {name}", callback_data=f"delsub_{sid}", style="danger")
         for sid, name in rows
     ]
     keyboard = chunk_buttons(btn_list, 2)
@@ -3045,9 +3068,9 @@ async def product_add_start(message: types.Message, state: FSMContext):
     if not rows:
         return await safe_send(message.from_user.id, "❌ أضف قسم أولاً.")
     
-    btn_list = [types.KeyboardButton(text=f"📂 {clean_name(name)}") for cid, name in rows]
+    btn_list = [types.KeyboardButton(text=f"📂 {clean_name(name)}", style="primary") for cid, name in rows]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية")])
+    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")])
     kb = types.ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     
     await safe_send(message.from_user.id, "اختر القسم:", reply_markup=kb)
@@ -3066,9 +3089,9 @@ async def product_add_cat(message: types.Message, state: FSMContext):
     if not rows:
         return await safe_send(message.from_user.id, "❌ لا توجد ألعاب.")
     
-    btn_list = [types.KeyboardButton(text=f"🎮 {sname}") for sid, sname in rows]
+    btn_list = [types.KeyboardButton(text=f"🎮 {sname}", style="primary") for sid, sname in rows]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية")])
+    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")])
     kb = types.ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     
     await safe_send(message.from_user.id, "اختر اللعبة:", reply_markup=kb)
@@ -3163,7 +3186,7 @@ async def product_delete_start(message: types.Message):
     if not is_admin(message.from_user.id):
         return
     btn_list = [
-        types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"seldelprodcat_{cid}")
+        types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"seldelprodcat_{cid}", style="primary")
         for cid, name in categories()
     ]
     keyboard = chunk_buttons(btn_list, 2)
@@ -3187,7 +3210,7 @@ async def product_delete_sub_list(cb: types.CallbackQuery):
             return
     
     btn_list = [
-        types.InlineKeyboardButton(text=f"🎮 {name}", callback_data=f"seldelprodsub_{sid}")
+        types.InlineKeyboardButton(text=f"🎮 {name}", callback_data=f"seldelprodsub_{sid}", style="primary")
         for sid, name in rows
     ]
     keyboard = chunk_buttons(btn_list, 2)
@@ -3215,7 +3238,7 @@ async def product_delete_prod_list(cb: types.CallbackQuery):
             return
     
     btn_list = [
-        types.InlineKeyboardButton(text=f"🗑️ {name}", callback_data=f"delprod_{pid}")
+        types.InlineKeyboardButton(text=f"🗑️ {name}", callback_data=f"delprod_{pid}", style="danger")
         for pid, name in rows
     ]
     keyboard = chunk_buttons(btn_list, 2)
@@ -3251,13 +3274,13 @@ async def main():
     init_db()
     await start_web_server()
     
-    # تسجيل أوامر البوت لظهور زر "القائمة /start" في شريط الإدخال
+    # تسجيل الأوامر لظهور زر القائمة /start بجانب شريط الكتابة
     try:
         await bot.set_my_commands([
             types.BotCommand(command="start", description="بدء تشغيل البوت والعودة للرئيسية")
         ])
     except Exception as e:
-        print(f"⚠️ فشل تعيين قائمة الأوامر: {e}")
+        print(f"⚠️ خطأ أثناء تعيين قائمة الأوامر: {e}")
 
     print("🚀 Bot Started Successfully with Supabase Database and Keep-Alive Server!")
     asyncio.create_task(auto_send_deposits_pdf_task())
