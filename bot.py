@@ -543,6 +543,9 @@ class AdminStates(StatesGroup):
     add_cat_name = State()
     edit_cat_select = State()
     edit_cat_new_name = State()
+    edit_sub_select_cat = State()
+    edit_sub_select = State()
+    edit_sub_new_name = State()
     edit_prod_select_cat = State()
     edit_prod_select_sub = State()
     edit_prod_select = State()
@@ -596,7 +599,7 @@ def admin_kb():
     rate = get_exchange_rate()
     kb = [
         [types.KeyboardButton(text="➕ إضافة قسم رئيسي", style="success"), types.KeyboardButton(text="✏️ تعديل اسم قسم", style="primary"), types.KeyboardButton(text="🗑️ إزالة قسم رئيسي", style="danger")],
-        [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
+        [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
         [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
         [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
         [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
@@ -1054,7 +1057,6 @@ def build_admin_orders_view(page=1, search_query=None):
     cur = conn.cursor()
 
     if search_query:
-        # البحث الذكي: يبحث سواء كان المدخل آيدي اللعبة (player_id) أو آيدي حساب التلغرام (user_id)
         is_num = str(search_query).strip().isdigit()
         if is_num:
             search_uid = int(str(search_query).strip())
@@ -1558,8 +1560,9 @@ async def cancel_order(cb: types.CallbackQuery, state: FSMContext):
     await safe_send(cb.from_user.id, "❌ تم إلغاء الطلب والعودة للرئيسية.", reply_markup=main_kb(cb.from_user.id))
 
 
+# ================= تتبع الطلب التلقائي (30 ثانية و 701 مرة) =================
 async def track_single_order(ouuid, uid, oid, amount, name):
-    for attempt in range(1, 201):
+    for attempt in range(1, 702):
         await asyncio.sleep(30)
         try:
             result = await check_order_api(ouuid)
@@ -2199,6 +2202,71 @@ async def edit_category_save(message: types.Message, state: FSMContext):
     await state.clear()
 
 
+# ================= تعديل اسم لعبة (Subcategory) =================
+@dp.message(F.text == "✏️ تعديل اسم لعبة")
+async def edit_game_name_start(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    rows = categories()
+    if not rows:
+        return await safe_send(message.from_user.id, "❌ لا توجد أقسام حالياً.")
+    btn_list = [types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"rengame_cat_{cid}", style="primary") for cid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    await safe_send(message.from_user.id, "اختر القسم الذي توجد به اللعبة:", reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("rengame_cat_"))
+async def edit_game_cat_chosen(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    cid = cb.data.split("_")[2]
+    rows = subs(cid)
+    if not rows:
+        return await cb.answer("لا توجد ألعاب داخل هذا القسم.", show_alert=True)
+    btn_list = [types.InlineKeyboardButton(text=f"🎮 {clean_name(name)}", callback_data=f"rengame_sub_{sid}", style="primary") for sid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        await cb.message.edit_text("اختر اللعبة المراد تعديل اسمها:", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("rengame_sub_"))
+async def edit_game_sub_chosen(cb: types.CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    sid = cb.data.split("_")[2]
+    await state.update_data({"edit_game_sid": sid})
+    cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+    await safe_send(cb.from_user.id, "أرسل الاسم الجديد للعبة الآن:", reply_markup=cancel_kb)
+    await state.set_state(AdminStates.edit_sub_new_name)
+
+
+@dp.message(AdminStates.edit_sub_new_name)
+async def edit_game_finish(message: types.Message, state: FSMContext):
+    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
+        await state.clear()
+        return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=admin_kb())
+    new_name = clean_name(message.text.strip())
+    if not new_name:
+        return await safe_send(message.from_user.id, "❌ الاسم لا يمكن أن يكون فارغاً.")
+    d = await state.get_data()
+    sid = d.get("edit_game_sid")
+    conn = db()
+    c = conn.cursor()
+    c.execute("UPDATE subcategories SET name=%s WHERE id=%s", (new_name, int(sid)))
+    conn.commit()
+    c.close()
+    conn.close()
+    await safe_send(message.from_user.id, f"✅ تم تعديل اسم اللعبة بنجاح إلى: <b>{esc(new_name)}</b>", reply_markup=admin_kb())
+    await state.clear()
+
+
 # ================= تعديل اسم منتج =================
 @dp.message(F.text == "✏️ تعديل اسم منتج")
 async def edit_product_name_start(message: types.Message, state: FSMContext):
@@ -2826,7 +2894,7 @@ async def product_delete_prod_list(cb: types.CallbackQuery):
     if not is_admin(cb.from_user.id):
         return await safe_answer(cb, "غير مصرح.", True)
     await safe_answer(cb)
-    sid = cb.data.split("_")[1]
+    sid = cb.data.split("_")[2]
     rows = products(sid)
     if not rows:
         return await cb.answer("لا توجد منتجات.", show_alert=True)
