@@ -155,6 +155,7 @@ def init_db():
     c.execute("INSERT INTO settings(key, value) VALUES('store_status', 'open') ON CONFLICT (key) DO NOTHING")
     c.execute("INSERT INTO settings(key, value) VALUES('store_margin_percent', '0') ON CONFLICT (key) DO NOTHING")
     c.execute("INSERT INTO settings(key, value) VALUES('exchange_rate', '15000') ON CONFLICT (key) DO NOTHING")
+    c.execute("INSERT INTO settings(key, value) VALUES('support_contact', '@SARE3_570') ON CONFLICT (key) DO NOTHING")
     
     payments = [
         ('binance', 'Binance Pay', '1192954957', True),
@@ -222,6 +223,16 @@ def get_exchange_rate():
         return float(row[0]) if row else 15000.0
     except (ValueError, TypeError):
         return 15000.0
+
+
+def get_support_contact():
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key='support_contact'")
+    row = c.fetchone()
+    c.close()
+    conn.close()
+    return row[0] if row and row[0] else "@SARE3_570"
 
 
 def apply_margin(base_price):
@@ -550,6 +561,13 @@ class AdminStates(StatesGroup):
     edit_prod_select_sub = State()
     edit_prod_select = State()
     edit_prod_new_name = State()
+    # لتعديل وصف المنتج
+    edit_prod_desc_cat = State()
+    edit_prod_desc_sub = State()
+    edit_prod_desc_pick = State()
+    edit_prod_desc_new = State()
+    # لتعديل حساب الدعم
+    edit_support_contact = State()
     add_sub_select_cat = State()
     add_sub_name = State()
     add_prod_select_cat = State()
@@ -600,13 +618,13 @@ def admin_kb():
     kb = [
         [types.KeyboardButton(text="➕ إضافة قسم رئيسي", style="success"), types.KeyboardButton(text="✏️ تعديل اسم قسم", style="primary"), types.KeyboardButton(text="🗑️ إزالة قسم رئيسي", style="danger")],
         [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
-        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
-        [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
+        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary")],
+        [types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger"), types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
         [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
         [types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger"), types.KeyboardButton(text="📋 الطلبات الكلية", style="primary")],
         [types.KeyboardButton(text="👤 إضافة أدمن جديد", style="primary"), types.KeyboardButton(text="🚫 إزالة أدمن", style="danger")],
         [types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"), types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary")],
-        [types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary")],
+        [types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary"), types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary")],
         [types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
     ]
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -783,11 +801,12 @@ async def balance(message: types.Message):
 
 @dp.message(F.text == "📞 التواصل مع الدعم")
 async def contact_support(message: types.Message):
+    sup_contact = get_support_contact()
     await safe_send(
         message.from_user.id,
         "📞 <b>للتواصل مع الدعم الفني:</b>\n\n"
         "في حال حدوث أي مشكلة أو للاستفسار، يرجى مراسلة الدعم عبر المعرف التالي:\n"
-        "👉 @SARE3_570"
+        f"👉 {esc(sup_contact)}"
     )
 
 
@@ -1010,6 +1029,7 @@ async def broadcast_execute(message: types.Message, state: FSMContext):
 # ================= طلباتي للعميل =================
 @dp.message(F.text == "📋 طلباتي")
 async def my_orders(message: types.Message):
+    sup_contact = get_support_contact()
     conn = db()
     c = conn.cursor()
     c.execute("""SELECT id, order_uuid, product_name, price, status, replay_api, qty, player_id, created_at
@@ -1019,7 +1039,7 @@ async def my_orders(message: types.Message):
     conn.close()
 
     if not rows:
-        return await safe_send(message.from_user.id, "ليس لديك أي طلبات سابقة.\n\nللدعم: @SARE3_570")
+        return await safe_send(message.from_user.id, f"ليس لديك أي طلبات سابقة.\n\nللدعم: {esc(sup_contact)}")
 
     for oid, ouuid, name, price, st, rep, qty, player, created_at in rows:
         status_txt = "🟢 مكتمل" if accepted(st) else ("🔴 مرفوض" if rejected(st) else "⏳ قيد الانتظار")
@@ -1560,7 +1580,7 @@ async def cancel_order(cb: types.CallbackQuery, state: FSMContext):
     await safe_send(cb.from_user.id, "❌ تم إلغاء الطلب والعودة للرئيسية.", reply_markup=main_kb(cb.from_user.id))
 
 
-# ================= تتبع الطلب التلقائي (30 ثانية و 701 مرة) =================
+# ================= تتبع الطلب التلقائي =================
 async def track_single_order(ouuid, uid, oid, amount, name):
     for attempt in range(1, 702):
         await asyncio.sleep(30)
@@ -2351,6 +2371,145 @@ async def edit_product_finish(message: types.Message, state: FSMContext):
     await state.clear()
 
 
+# ================= تعديل وصف منتج =================
+@dp.message(F.text == "📝 تعديل وصف منتج")
+async def edit_product_desc_start(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    rows = categories()
+    if not rows:
+        return await safe_send(message.from_user.id, "❌ لا توجد أقسام.")
+    btn_list = [types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"edesc_cat_{cid}", style="primary") for cid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    await safe_send(message.from_user.id, "اختر القسم الخاص بالمنتج:", reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("edesc_cat_"))
+async def edit_prod_desc_cat_cb(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    cid = cb.data.split("_")[2]
+    rows = subs(cid)
+    if not rows:
+        return await cb.answer("لا توجد ألعاب بهذا القسم.", show_alert=True)
+    btn_list = [types.InlineKeyboardButton(text=f"🎮 {clean_name(name)}", callback_data=f"edesc_sub_{sid}", style="primary") for sid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        await cb.message.edit_text("اختر اللعبة:", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("edesc_sub_"))
+async def edit_prod_desc_sub_cb(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    sid = cb.data.split("_")[2]
+    rows = products(sid)
+    if not rows:
+        return await cb.answer("لا توجد منتجات.", show_alert=True)
+    btn_list = [types.InlineKeyboardButton(text=f"📦 {name}", callback_data=f"edesc_pick_{pid}", style="primary") for pid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        await cb.message.edit_text("اختر المنتج لتعديل وصفه:", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("edesc_pick_"))
+async def edit_prod_desc_pick_cb(cb: types.CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    pid = cb.data.split("_")[2]
+    p_info = product(pid)
+    current_desc = p_info[7] if (p_info and p_info[7]) else "لا يوجد وصف حالياً"
+    
+    await state.update_data({"edit_desc_pid": pid})
+    cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+    
+    await safe_send(
+        cb.from_user.id,
+        f"📝 <b>تعديل وصف المنتج:</b>\n"
+        f"📦 المنتج: <b>{esc(p_info[0] if p_info else pid)}</b>\n\n"
+        f"📄 <b>الوصف الحالي:</b>\n<code>{esc(current_desc)}</code>\n\n"
+        "أرسل الوصف الجديد الآن (أو أرسل كلمة <code>حذف الوصف</code> لمسحه):",
+        reply_markup=cancel_kb
+    )
+    await state.set_state(AdminStates.edit_prod_desc_new)
+
+
+@dp.message(AdminStates.edit_prod_desc_new)
+async def edit_prod_desc_save(message: types.Message, state: FSMContext):
+    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
+        await state.clear()
+        return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=admin_kb())
+    
+    val = message.text.strip()
+    new_desc = "" if val == "حذف الوصف" else val
+    d = await state.get_data()
+    pid = d.get("edit_desc_pid")
+    
+    conn = db()
+    c = conn.cursor()
+    c.execute("UPDATE products SET description=%s WHERE mhd_id=%s", (new_desc, int(pid)))
+    conn.commit()
+    c.close()
+    conn.close()
+    
+    msg_txt = "✅ تم مسح وصف المنتج بنجاح." if not new_desc else "✅ تم تحديث وصف المنتج بنجاح!"
+    await safe_send(message.from_user.id, msg_txt, reply_markup=admin_kb())
+    await state.clear()
+
+
+# ================= تعديل حساب الدعم =================
+@dp.message(F.text == "📞 تعديل حساب الدعم")
+async def edit_support_contact_start(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    current_sup = get_support_contact()
+    cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+    await safe_send(
+        message.from_user.id,
+        f"📞 <b>إدارة وتعديل حساب الدعم الفني:</b>\n\n"
+        f"الحساب الحالي: <b>{esc(current_sup)}</b>\n\n"
+        "أرسل المعرف الجديد لحساب الدعم (مثال: <code>@SARE3_570</code> أو رابط تليجرام):",
+        reply_markup=cancel_kb
+    )
+    await state.set_state(AdminStates.edit_support_contact)
+
+
+@dp.message(AdminStates.edit_support_contact)
+async def edit_support_contact_finish(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
+        await state.clear()
+        return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=admin_kb())
+    
+    new_contact = message.text.strip()
+    if not new_contact:
+        return await safe_send(message.from_user.id, "❌ لا يمكن أن يكون معرف الدعم فارغاً.")
+    
+    conn = db()
+    c = conn.cursor()
+    c.execute("INSERT INTO settings(key, value) VALUES('support_contact', %s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (new_contact,))
+    conn.commit()
+    c.close()
+    conn.close()
+
+    await safe_send(message.from_user.id, f"✅ <b>تم تحديث حساب الدعم بنجاح!</b>\nالحساب الجديد: <b>{esc(new_contact)}</b>", reply_markup=admin_kb())
+    await state.clear()
+
+
 # ================= إضافة وحذف الأدمن =================
 @dp.message(F.text == "👤 إضافة أدمن جديد")
 async def new_admin_start(message: types.Message, state: FSMContext):
@@ -2942,3 +3101,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+github.com/mhop26508-ux/main.py
