@@ -34,6 +34,9 @@ MHD_PRODUCTS_URL = f"{API_BASE_URL}/client/api/products"
 
 DATABASE_URL = "postgresql://postgres.qmgvtflvgvosgseqmelf:Mlpoknbji0%24570@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres"
 
+# طرق الدفع المعتمدة بالدولار مباشرة (بينانس، شام كاش دولار، BEP20)
+USD_PAYMENT_METHODS = {"binance", "bep20", "sham_usd"}
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -1701,7 +1704,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
                 accept_once(oid, rep)
                 text = f"🎉 <b>تم اكتمال طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
-                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(rep)}</code>\n"
+                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(clean_rep)}</code>\n"
             else:
                 text = f"✅ <b>تم استلام طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
@@ -1746,13 +1749,13 @@ async def deposit_menu(message: types.Message, state: FSMContext):
     
     keyboard = []
     for code, name in rows:
-        style = "danger" if code == "syriatel" else ("success" if code in ("bep20", "binance") else "primary")
+        style = "danger" if code == "syriatel" else ("success" if code in ("bep20", "binance", "sham_usd") else "primary")
         keyboard.append([types.InlineKeyboardButton(text=f"💳 {name}", callback_data=f"pay_{code}", style=style)])
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     await safe_send(
         message.from_user.id,
-        f"💳 <b>اختر وسيلة الدفع لشحن الرصيد بالليرة السورية الجديدة:</b>\n\n📌 <i>سعر الصرف المعتمد في البوت: 1$ = {rate:,.0f} ل.س</i>",
+        f"💳 <b>اختر وسيلة الدفع لشحن الرصيد:</b>\n\n📌 <i>سعر الصرف المعتمد لطرق الدفع بالليرة: 1$ = {rate:,.0f} ل.س</i>",
         reply_markup=kb
     )
 
@@ -1780,11 +1783,17 @@ async def pay_info(cb: types.CallbackQuery, state: FSMContext):
             [types.InlineKeyboardButton(text="❌ إلغاء", callback_data="cancel_pay", style="danger")]
         ]
     )
+    
+    if code in USD_PAYMENT_METHODS:
+        currency_notice = "📌 <i>طريقة الدفع هذه بالدولار ($) مباشرة بدون تصريف.</i>"
+    else:
+        currency_notice = f"📌 <i>ملاحظة: الشحن بالليرة السورية (سعر الصرف: 1$ = {rate:,.0f} ل.س) وسيتم إضافة الرصيد لحسابك بالدولار ($).</i>"
+
     try:
         await cb.message.edit_text(
             f"💳 <b>طريقة الدفع: {esc(row[0])}</b>\n\n"
             f"يرجى التحويل للعنوان/الرقم التالي:\n<code>{esc(row[1])}</code>\n\n"
-            f"📌 <i>ملاحظة: الشحن بالليرة السورية الجديدة (سعر الصرف: 1$ = {rate:,.0f} ل.س) وسيتم إضافة الرصيد لحسابك بالدولار ($).</i>\n\n"
+            f"{currency_notice}\n\n"
             "بعد إتمام التحويل، اضغط على 'أرسل بيانات التحويل'.",
             reply_markup=kb, parse_mode="HTML"
         )
@@ -1823,11 +1832,17 @@ async def trans_id(message: types.Message, state: FSMContext):
         return await safe_send(message.from_user.id, "❌ أدخل رقم العملية بشكل صحيح.")
 
     await state.update_data({"trans_id": x})
-    rate = get_exchange_rate()
-    prompt_text = (
-        f"الآن، أرسل المبلغ الذي قمت بتحويله <b>بالليرة السورية الجديدة (ل.س)</b>:\n"
-        f"(سعر الصرف المعتمد: 1$ = {rate:,.0f} ل.س)"
-    )
+    d = await state.get_data()
+    method = d.get("dep_method")
+
+    if method in USD_PAYMENT_METHODS:
+        prompt_text = "الآن، أرسل المبلغ الذي قمت بتحويله <b>بالدولار ($)</b>:"
+    else:
+        rate = get_exchange_rate()
+        prompt_text = (
+            f"الآن، أرسل المبلغ الذي قمت بتحويله <b>بالليرة السورية (ل.س)</b>:\n"
+            f"(سعر الصرف المعتمد: 1$ = {rate:,.0f} ل.س)"
+        )
 
     await safe_send(message.from_user.id, prompt_text)
     await state.set_state(ClientStates.wait_dep_amount)
@@ -1839,16 +1854,16 @@ async def dep_amount(message: types.Message, state: FSMContext):
         await state.clear()
         return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=main_kb(message.from_user.id))
         
-    try:
-        amount_syp = float(message.text.strip().replace(",", ""))
-        if amount_syp <= 0 or amount_syp > 10000000000:
-            raise ValueError
-    except ValueError:
-        return await safe_send(message.from_user.id, "❌ أدخل مبلغاً صحيحاً بالليرة السورية بالأرقام فقط.")
-
     d = await state.get_data()
     method = d.get("dep_method")
     trans = d.get("trans_id")
+
+    try:
+        entered_amount = float(message.text.strip().replace(",", ""))
+        if entered_amount <= 0 or entered_amount > 10000000000:
+            raise ValueError
+    except ValueError:
+        return await safe_send(message.from_user.id, "❌ أدخل مبلغاً صحيحاً بالأرقام فقط.")
 
     user_init(message.from_user.id, message.from_user.username or message.from_user.first_name or "")
     u = get_user(message.from_user.id)
@@ -1861,9 +1876,14 @@ async def dep_amount(message: types.Message, state: FSMContext):
     conn_m.close()
     method_display_name = m_name[0] if m_name else method
 
-    rate = get_exchange_rate()
-    amount_usd = amount_syp / rate
-    amount_txt = f"{amount_syp:,.0f} ل.س (ما يعادل: <b>${amount_usd:.4f}</b> بسعر صرف {rate:,.0f})"
+    if method in USD_PAYMENT_METHODS:
+        amount_usd = entered_amount
+        amount_txt = f"<b>${amount_usd:.4f}</b> (دفع مباشر بالدولار)"
+    else:
+        rate = get_exchange_rate()
+        amount_usd = entered_amount / rate
+        amount_txt = f"{entered_amount:,.0f} ل.س (ما يعادل: <b>${amount_usd:.4f}</b> بسعر صرف {rate:,.0f})"
+
     suggested_usd = f"{amount_usd:.4f}"
 
     kb = types.InlineKeyboardMarkup(
