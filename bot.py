@@ -34,7 +34,6 @@ MHD_PRODUCTS_URL = f"{API_BASE_URL}/client/api/products"
 
 DATABASE_URL = "postgresql://postgres.qmgvtflvgvosgseqmelf:Mlpoknbji0%24570@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres"
 
-# طرق الدفع المعتمدة بالدولار مباشرة (بينانس، شام كاش دولار، BEP20)
 USD_PAYMENT_METHODS = {"binance", "bep20", "sham_usd"}
 
 bot = Bot(token=BOT_TOKEN)
@@ -617,16 +616,22 @@ def admin_kb():
     margin = get_margin_percent()
     rate = get_exchange_rate()
     kb = [
+        # إدارة الأقسام
         [types.KeyboardButton(text="➕ إضافة قسم رئيسي", style="success"), types.KeyboardButton(text="✏️ تعديل اسم قسم", style="primary"), types.KeyboardButton(text="🗑️ إزالة قسم رئيسي", style="danger")],
+        # إدارة الألعاب
         [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
+        # إدارة المنتجات
         [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary")],
-        [types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger"), types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
+        [types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
+        # الرصيد والأسعار
+        [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
         [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
-        [types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger"), types.KeyboardButton(text="📋 الطلبات الكلية", style="primary")],
+        # إدارة المتجر والطلبات
+        [types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger"), types.KeyboardButton(text="📋 الطلبات الكلية", style="primary"), types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary")],
+        # الأدمن وطرق الدفع والاتصال
         [types.KeyboardButton(text="👤 إضافة أدمن جديد", style="primary"), types.KeyboardButton(text="🚫 إزالة أدمن", style="danger")],
-        [types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"), types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary")],
-        [types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary"), types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary")],
-        [types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
+        [types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"), types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary")],
+        [types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary"), types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
     ]
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -1704,7 +1709,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
                 accept_once(oid, rep)
                 text = f"🎉 <b>تم اكتمال طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
-                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(clean_rep)}</code>\n"
+                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(rep)}</code>\n"
             else:
                 text = f"✅ <b>تم استلام طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
@@ -2997,10 +3002,10 @@ async def product_delete_prod_list(cb: types.CallbackQuery):
     if not is_admin(cb.from_user.id):
         return await safe_answer(cb, "غير مصرح.", True)
     await safe_answer(cb)
-    sid = cb.data.split("_")[2]
+    sid = cb.data.split("_")[1]
     rows = products(sid)
     if not rows:
-        return await cb.answer("لا توجد منتجات.", show_alert=True)
+        return await cb.answer("لا توجد منتجات داخل هذه اللعبة.", show_alert=True)
     btn_list = [types.InlineKeyboardButton(text=f"🗑️ {name}", callback_data=f"delprod_{pid}", style="danger") for pid, name in rows]
     keyboard = chunk_buttons(btn_list, 2)
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -3045,4 +3050,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
