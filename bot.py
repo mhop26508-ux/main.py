@@ -91,6 +91,47 @@ def clean_name(name):
     return str(name).replace("📁", "").replace("🗂️", "").strip()
 
 
+def check_is_available(data):
+    """التحقق الدقيق والشامل من حالة توفر المنتج من بيانات الـ API أو قاعدة البيانات"""
+    if not isinstance(data, dict):
+        return bool(data)
+    
+    # فحص صريح للمخزون (Stock)
+    stock_val = data.get("stock")
+    if stock_val is not None:
+        try:
+            if int(stock_val) <= 0:
+                return False
+        except (ValueError, TypeError):
+            pass
+
+    # فحص مفاتيح التوفر المختلفة
+    for key in ("available", "is_available", "in_stock", "active"):
+        if key in data and data[key] is not None:
+            val = data[key]
+            if isinstance(val, bool):
+                if not val:
+                    return False
+            elif str(val).strip().lower() in ("0", "false", "no", "inactive", "غير متوفر", "معطل"):
+                return False
+
+    # فحص حقل الحالة العامة (Status)
+    for skey in ("status", "product_status", "state"):
+        if skey in data and data[skey] is not None:
+            st = str(data[skey]).strip().lower()
+            if st in ("0", "false", "inactive", "disabled", "closed", "out_of_stock", "غير متوفر", "معطل"):
+                return False
+
+    # التحقق من أن أحد المفاتيح أقر بالتوفر أو القيمة الافتراضية
+    avail_val = data.get("available")
+    if avail_val is not None:
+        if isinstance(avail_val, bool):
+            return avail_val
+        return str(avail_val).strip().lower() not in ("0", "false", "no")
+
+    return True
+
+
 def session(timeout=15):
     connector = aiohttp.TCPConnector(family=2, ssl=False, ttl_dns_cache=300, limit=10)
     return aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=timeout, connect=5, sock_connect=5))
@@ -1371,14 +1412,15 @@ async def show_product(cb: types.CallbackQuery):
     if api:
         name = row[0] if row else (api.get("name") or "غير محدد")
         price = float(api.get("price", 0) or 0)
-        available = api.get("available", True)
+        available = check_is_available(api)
         ptype = api.get("product_type", "digital")
         pdata = api
         desc = row[7] if row else ""
     else:
-        name, base_p, available, stock, mn, mx, ptype, desc, api_data = row
+        name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data = row
         price = apply_margin(base_p)
         pdata = db_product_data(row)
+        available = check_is_available(pdata) if pdata else bool(db_avail)
 
     params = required_params(pdata)
     req = " و ".join(params) if params else "⚡ تسليم فوري (لا يتطلب مدخلات)"
@@ -1474,10 +1516,10 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
         desc = row[7] or ""
         pdata = db_product_data(row)
 
-    available = pdata.get("available", row[2] if row else True)
+    available = check_is_available(api) if api else check_is_available(pdata)
     ptype = pdata.get("product_type", row[6] if row else "digital")
     if not available:
-        return await cb.answer("❌ المنتج غير متوفر.", show_alert=True)
+        return await cb.answer("❌ المنتج غير متوفر حالياً!", show_alert=True)
 
     qtys_from_desc = extract_quantities_from_text(desc)
 
@@ -2947,6 +2989,7 @@ async def product_save(message: types.Message, state: FSMContext):
     sub_id = d["sub_id"]
     pid = d["temp_pid"]
     base_price = float(api.get("price", 0) or 0)
+    avail = check_is_available(api)
 
     conn = db()
     c = conn.cursor()
@@ -2955,7 +2998,7 @@ async def product_save(message: types.Message, state: FSMContext):
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                  (int(pid), api.get("name", "غير محدد"), base_price,
                   api.get("product_type", "digital"),
-                  bool(api.get("available", True)),
+                  avail,
                   int(api.get("stock", 999) or 999),
                   float(api.get("min_qty", 1) or 1),
                   float(api.get("max_qty", 1000) or 1000),
