@@ -94,40 +94,45 @@ def clean_name(name):
 def check_is_available(data):
     """التحقق الدقيق والشامل من حالة توفر المنتج من بيانات الـ API أو قاعدة البيانات"""
     if not isinstance(data, dict):
-        return bool(data)
+        if isinstance(data, bool):
+            return data
+        if data is None:
+            return False
+        val_str = str(data).strip().lower()
+        return val_str not in ("0", "false", "no", "inactive", "disabled", "none", "null")
     
-    # فحص صريح للمخزون (Stock)
-    stock_val = data.get("stock")
-    if stock_val is not None:
-        try:
-            if int(stock_val) <= 0:
-                return False
-        except (ValueError, TypeError):
-            pass
+    # 1. فحص المخزون والكمية (stock أو qty)
+    for q_key in ("stock", "qty", "quantity", "amount_available"):
+        if q_key in data and data[q_key] is not None:
+            try:
+                if float(data[q_key]) <= 0:
+                    return False
+            except (ValueError, TypeError):
+                pass
 
-    # فحص مفاتيح التوفر المختلفة
-    for key in ("available", "is_available", "in_stock", "active"):
+    # 2. فحص مفاتيح التوفر الصريحة
+    for key in ("available", "is_available", "in_stock", "is_stock", "active", "enable", "is_active"):
         if key in data and data[key] is not None:
             val = data[key]
-            if isinstance(val, bool):
-                if not val:
-                    return False
-            elif str(val).strip().lower() in ("0", "false", "no", "inactive", "غير متوفر", "معطل"):
+            if isinstance(val, bool) and not val:
+                return False
+            val_str = str(val).strip().lower()
+            if val_str in ("0", "false", "no", "inactive", "disabled", "off", "out_of_stock", "غير متوفر", "معطل"):
                 return False
 
-    # فحص حقل الحالة العامة (Status)
+    # 3. فحص نصوص الحالة (status)
     for skey in ("status", "product_status", "state"):
         if skey in data and data[skey] is not None:
             st = str(data[skey]).strip().lower()
-            if st in ("0", "false", "inactive", "disabled", "closed", "out_of_stock", "غير متوفر", "معطل"):
+            if st in ("0", "false", "inactive", "disabled", "closed", "out_of_stock", "unavailable", "غير متوفر", "معطل"):
                 return False
 
-    # التحقق من أن أحد المفاتيح أقر بالتوفر أو القيمة الافتراضية
-    avail_val = data.get("available")
-    if avail_val is not None:
-        if isinstance(avail_val, bool):
-            return avail_val
-        return str(avail_val).strip().lower() not in ("0", "false", "no")
+    # 4. إذا توفر حقل available كـ False
+    if "available" in data and data["available"] is not None:
+        val = data["available"]
+        if isinstance(val, bool):
+            return val
+        return str(val).strip().lower() not in ("0", "false", "no")
 
     return True
 
@@ -678,6 +683,7 @@ def admin_kb():
 
 
 async def fetch_product(pid):
+    """جلب بيانات المنتج الحالية والمباشرة من API سيرفر MHD"""
     try:
         async with session(15) as s:
             async with s.get(MHD_PRODUCTS_URL, headers={"api-token": MHD_API_TOKEN}) as r:
@@ -688,11 +694,12 @@ async def fetch_product(pid):
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
                     return None
+        
+        arr = []
         if isinstance(payload, list):
             arr = payload
         elif isinstance(payload, dict):
-            arr = []
-            for key in ("data", "products", "result"):
+            for key in ("data", "products", "result", "items"):
                 if isinstance(payload.get(key), list):
                     arr = payload[key]
                     break
@@ -701,12 +708,13 @@ async def fetch_product(pid):
                     if isinstance(payload.get(key), dict):
                         arr = [payload[key]]
                         break
-        else:
-            arr = []
+
+        wanted_id_str = str(pid).strip()
         for p in arr:
             if isinstance(p, dict):
-                x = p.get("id") or p.get("product_id") or p.get("productId")
-                if str(x) == str(pid):
+                # مطابقة كافة المعرفات المحتملة للمنتج
+                p_id = str(p.get("id") or p.get("product_id") or p.get("productId") or p.get("mhd_id") or "").strip()
+                if p_id == wanted_id_str:
                     p_copy = dict(p)
                     if "price" in p_copy:
                         p_copy["price"] = apply_margin(p_copy["price"])
@@ -757,9 +765,17 @@ def db_product_data(row):
             data["name"] = row[0]
             data["description"] = row[7] or ""
             data["product_type"] = row[6] or ""
+            data["available"] = row[2]
+            data["stock"] = row[3]
         return data
     except Exception:
-        return {"name": row[0] if row else "", "description": row[7] if row else "", "product_type": row[6] if row else ""}
+        return {
+            "name": row[0] if row else "",
+            "description": row[7] if row else "",
+            "product_type": row[6] if row else "",
+            "available": row[2] if row else False,
+            "stock": row[3] if row else 0
+        }
 
 
 async def auto_send_deposits_pdf_task():
@@ -848,7 +864,7 @@ async def contact_support(message: types.Message):
     await safe_send(
         message.from_user.id,
         "📞 <b>للتواصل مع الدعم الفني:</b>\n\n"
-        "في حال حدوث أي مشكلة أو للاستفسار، يرجى مراسلة الدعم عبر المعرف التالي:\n"
+        "في حال حدوض أي مشكلة أو للاستفسار، يرجى مراسلة الدعم عبر المعرف التالي:\n"
         f"👉 {esc(sup_contact)}"
     )
 
@@ -1417,10 +1433,10 @@ async def show_product(cb: types.CallbackQuery):
         pdata = api
         desc = row[7] if row else ""
     else:
-        name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data = row
+        name, base_p, db_avail, db_stock, mn, mx, ptype, desc, api_data = row
         price = apply_margin(base_p)
         pdata = db_product_data(row)
-        available = check_is_available(pdata) if pdata else bool(db_avail)
+        available = check_is_available(pdata)
 
     params = required_params(pdata)
     req = " و ".join(params) if params else "⚡ تسليم فوري (لا يتطلب مدخلات)"
@@ -1445,6 +1461,9 @@ async def show_product(cb: types.CallbackQuery):
     keyboard = []
     if available:
         keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"buy_{pid}", style="success")])
+    else:
+        keyboard.append([types.InlineKeyboardButton(text="🔴 غير متوفر حالياً", callback_data="none_action", style="danger")])
+
     if in_wish:
         keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}", style="danger")])
     else:
@@ -1458,6 +1477,11 @@ async def show_product(cb: types.CallbackQuery):
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise e
+
+
+@dp.callback_query(F.data == "none_action")
+async def none_action_cb(cb: types.CallbackQuery):
+    await cb.answer("⚠️ هذا المنتج غير متوفر في المتجر حالياً!", show_alert=True)
 
 
 # ================= الشراء والإنهاء =================
@@ -3093,3 +3117,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
