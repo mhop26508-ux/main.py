@@ -91,31 +91,6 @@ def clean_name(name):
     return str(name).replace("📁", "").replace("🗂️", "").strip()
 
 
-def check_is_available(item):
-    """
-    التحقق الصارم من توفر المنتج وفقاً لتوثيق MHD API:
-    - available يجب أن تكون True
-    - stock يجب أن يكون أكبر تماماً من 0
-    """
-    if not isinstance(item, dict):
-        return bool(item)
-
-    # 1. فحص قيمة available
-    avail = item.get("available")
-    if avail is False or str(avail).strip().lower() in ("0", "false", "no", "null", "none"):
-        return False
-
-    # 2. فحص المخزون stock
-    if "stock" in item and item["stock"] is not None:
-        try:
-            if int(item["stock"]) <= 0:
-                return False
-        except (ValueError, TypeError):
-            pass
-
-    return True
-
-
 def session(timeout=15):
     connector = aiohttp.TCPConnector(family=2, ssl=False, ttl_dns_cache=300, limit=10)
     return aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=timeout, connect=5, sock_connect=5))
@@ -646,8 +621,8 @@ def admin_kb():
         # إدارة الألعاب
         [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
         # إدارة المنتجات
-        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary")],
-        [types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
+        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="🔄 تفعيل / تعطيل منتج", style="primary"), types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary")],
+        [types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
         # الرصيد والأسعار
         [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
         [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
@@ -662,7 +637,6 @@ def admin_kb():
 
 
 async def fetch_product(pid):
-    """جلب بيانات المنتج الحالية والمباشرة من مصفوفة منتجات MHD API"""
     try:
         async with session(15) as s:
             async with s.get(MHD_PRODUCTS_URL, headers={"api-token": MHD_API_TOKEN}) as r:
@@ -673,12 +647,11 @@ async def fetch_product(pid):
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
                     return None
-        
-        arr = []
         if isinstance(payload, list):
             arr = payload
         elif isinstance(payload, dict):
-            for key in ("data", "products", "result", "items"):
+            arr = []
+            for key in ("data", "products", "result"):
                 if isinstance(payload.get(key), list):
                     arr = payload[key]
                     break
@@ -687,12 +660,12 @@ async def fetch_product(pid):
                     if isinstance(payload.get(key), dict):
                         arr = [payload[key]]
                         break
-
-        wanted_id_str = str(pid).strip()
+        else:
+            arr = []
         for p in arr:
             if isinstance(p, dict):
-                p_id = str(p.get("id") or p.get("product_id") or p.get("productId") or "").strip()
-                if p_id == wanted_id_str:
+                x = p.get("id") or p.get("product_id") or p.get("productId")
+                if str(x) == str(pid):
                     p_copy = dict(p)
                     if "price" in p_copy:
                         p_copy["price"] = apply_margin(p_copy["price"])
@@ -743,17 +716,9 @@ def db_product_data(row):
             data["name"] = row[0]
             data["description"] = row[7] or ""
             data["product_type"] = row[6] or ""
-            data["available"] = row[2]
-            data["stock"] = row[3]
         return data
     except Exception:
-        return {
-            "name": row[0] if row else "",
-            "description": row[7] if row else "",
-            "product_type": row[6] if row else "",
-            "available": row[2] if row else False,
-            "stock": row[3] if row else 0
-        }
+        return {"name": row[0] if row else "", "description": row[7] if row else "", "product_type": row[6] if row else ""}
 
 
 async def auto_send_deposits_pdf_task():
@@ -1398,24 +1363,27 @@ async def show_product(cb: types.CallbackQuery):
     pid = parts[1]
     sid = parts[2] if len(parts) > 2 else None
 
-    # جلب بيانات المنتج الحالية والمباشرة من API سيرفر MHD
     api = await fetch_product(pid)
     row = product(pid)
     if not api and not row:
         return await cb.answer("المنتج غير موجود.", show_alert=True)
 
+    # التحقق من توفر المنتج محلياً من قاعدة البيانات أولاً
+    local_available = bool(row[2]) if row else True
+
     if api:
         name = row[0] if row else (api.get("name") or "غير محدد")
         price = float(api.get("price", 0) or 0)
-        available = check_is_available(api)
+        # المنتج يكون متاحاً فقط إذا كان متاحاً في الموقع والمشرف لم يقم بتعطيله محلياً
+        available = bool(api.get("available", True)) and local_available
         ptype = api.get("product_type", "digital")
         pdata = api
         desc = row[7] if row else ""
     else:
-        name, base_p, db_avail, db_stock, mn, mx, ptype, desc, api_data = row
+        name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data = row
         price = apply_margin(base_p)
+        available = bool(db_avail)
         pdata = db_product_data(row)
-        available = check_is_available(pdata)
 
     params = required_params(pdata)
     req = " و ".join(params) if params else "⚡ تسليم فوري (لا يتطلب مدخلات)"
@@ -1440,9 +1408,6 @@ async def show_product(cb: types.CallbackQuery):
     keyboard = []
     if available:
         keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"buy_{pid}", style="success")])
-    else:
-        keyboard.append([types.InlineKeyboardButton(text="🔴 غير متوفر حالياً", callback_data="none_action", style="danger")])
-
     if in_wish:
         keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}", style="danger")])
     else:
@@ -1456,11 +1421,6 @@ async def show_product(cb: types.CallbackQuery):
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise e
-
-
-@dp.callback_query(F.data == "none_action")
-async def none_action_cb(cb: types.CallbackQuery):
-    await cb.answer("⚠️ هذا المنتج غير متوفر في المتجر حالياً ولا يمكن شراؤه.", show_alert=True)
 
 
 # ================= الشراء والإنهاء =================
@@ -1508,21 +1468,24 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
     if not api and not row:
         return await cb.answer("خطأ في بيانات المنتج.", show_alert=True)
 
+    local_available = bool(row[2]) if row else True
+
     if api:
         name = row[0] if row else api.get("name", "غير محدد")
         price = float(api.get("price", 0) or 0)
         desc = ""
         pdata = api
+        available = bool(api.get("available", True)) and local_available
     else:
         name = row[0]
         price = apply_margin(row[1])
         desc = row[7] or ""
         pdata = db_product_data(row)
+        available = local_available
 
-    available = check_is_available(api) if api else check_is_available(pdata)
     ptype = pdata.get("product_type", row[6] if row else "digital")
     if not available:
-        return await cb.answer("❌ عذراً، هذا المنتج غير متوفر حالياً في المتجر!", show_alert=True)
+        return await cb.answer("❌ المنتج غير متوفر حالياً.", show_alert=True)
 
     qtys_from_desc = extract_quantities_from_text(desc)
 
@@ -2168,6 +2131,125 @@ async def edit_all_prices_finish(message: types.Message, state: FSMContext):
 
     await safe_send(message.from_user.id, f"✅ <b>تم تحديث أسعار المتجر بنجاح!</b>\nالنسبة المطبقة: <b>{val:g}%</b>", reply_markup=admin_kb())
     await state.clear()
+
+
+# ================= تفعيل / تعطيل منتج (غير متوفر) =================
+@dp.message(F.text == "🔄 تفعيل / تعطيل منتج")
+async def toggle_product_start(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    rows = categories()
+    if not rows:
+        return await safe_send(message.from_user.id, "❌ لا توجد أقسام حالياً.")
+    btn_list = [types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"tglcat_{cid}", style="primary") for cid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    await safe_send(message.from_user.id, "اختر القسم الخاص بالمنتج لتعديل حالته (متوفر / غير متوفر):", reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("tglcat_"))
+async def toggle_product_cat_chosen(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    cid = cb.data.split("_")[1]
+    rows = subs(cid)
+    if not rows:
+        return await cb.answer("لا توجد ألعاب بهذا القسم.", show_alert=True)
+    btn_list = [types.InlineKeyboardButton(text=f"🎮 {clean_name(name)}", callback_data=f"tglsub_{sid}", style="primary") for sid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        await cb.message.edit_text("اختر اللعبة:", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+def build_toggle_products_kb(sid):
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT mhd_id, name, available FROM products WHERE sub_id=%s ORDER BY id", (sid,))
+    rows = c.fetchall()
+    c.close()
+    conn.close()
+
+    btn_list = []
+    for pid, name, is_avail in rows:
+        icon = "🟢 متوفر" if is_avail else "🔴 غير متوفر"
+        btn_list.append(types.InlineKeyboardButton(text=f"{icon} | {name}", callback_data=f"tglprod_{pid}_{sid}", style="primary"))
+    
+    keyboard = chunk_buttons(btn_list, 1)
+    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للأقسام", callback_data="back_to_tgl_cats", style="danger")])
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard), len(rows)
+
+
+@dp.callback_query(F.data == "back_to_tgl_cats")
+async def back_to_tgl_cats_cb(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    rows = categories()
+    btn_list = [types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"tglcat_{cid}", style="primary") for cid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        await cb.message.edit_text("اختر القسم الخاص بالمنتج لتعديل حالته (متوفر / غير متوفر):", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("tglsub_"))
+async def toggle_product_sub_chosen(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    sid = cb.data.split("_")[1]
+    kb, count = build_toggle_products_kb(sid)
+    if count == 0:
+        return await cb.answer("لا توجد منتجات داخل هذه اللعبة.", show_alert=True)
+    try:
+        await cb.message.edit_text("اضغط على المنتج لتغيير حالته بين (متوفر 🟢) و (غير متوفر 🔴):", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("tglprod_"))
+async def toggle_product_action(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    parts = cb.data.split("_")
+    pid = parts[1]
+    sid = parts[2]
+
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT available, name FROM products WHERE mhd_id=%s", (int(pid),))
+    row = c.fetchone()
+    if not row:
+        c.close()
+        conn.close()
+        return await cb.answer("المنتج غير موجود.", show_alert=True)
+    
+    current_status = bool(row[0])
+    new_status = not current_status
+    c.execute("UPDATE products SET available=%s WHERE mhd_id=%s", (new_status, int(pid)))
+    conn.commit()
+    c.close()
+    conn.close()
+
+    status_str = "🟢 تم تفعيل المنتج (متوفر)" if new_status else "🔴 تم تعطيل المنتج (غير متوفر)"
+    await cb.answer(f"{status_str}: {row[1]}", show_alert=True)
+
+    kb, _ = build_toggle_products_kb(sid)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
 
 
 # ================= تعديل اسم قسم رئيسي =================
@@ -2992,7 +3074,6 @@ async def product_save(message: types.Message, state: FSMContext):
     sub_id = d["sub_id"]
     pid = d["temp_pid"]
     base_price = float(api.get("price", 0) or 0)
-    avail = check_is_available(api)
 
     conn = db()
     c = conn.cursor()
@@ -3001,10 +3082,10 @@ async def product_save(message: types.Message, state: FSMContext):
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                  (int(pid), api.get("name", "غير محدد"), base_price,
                   api.get("product_type", "digital"),
-                  avail,
-                  int(api.get("stock", 0) or 0),
-                  float(api.get("qty_values", {}).get("min", 1) or 1) if isinstance(api.get("qty_values"), dict) else 1.0,
-                  float(api.get("qty_values", {}).get("max", 1000) or 1000) if isinstance(api.get("qty_values"), dict) else 1000.0,
+                  bool(api.get("available", True)),
+                  int(api.get("stock", 999) or 999),
+                  float(api.get("min_qty", 1) or 1),
+                  float(api.get("max_qty", 1000) or 1000),
                   sub_id, desc, json.dumps(api)))
     conn.commit()
     c.close()
@@ -3096,3 +3177,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
