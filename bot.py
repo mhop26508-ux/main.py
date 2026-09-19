@@ -1279,7 +1279,7 @@ def build_admin_orders_view(page=1, search_query=None):
     if search_query:
         inline_keyboard.append([types.InlineKeyboardButton(text="🔄 إلغاء التصفية (عرض الكل)", callback_data="admin_orders_page_1", style="danger")])
 
-    kb = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     return text, kb
 
 
@@ -1567,9 +1567,8 @@ async def next_buy_step(user_id: int, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("buy_"))
 async def start_buy(cb: types.CallbackQuery, state: FSMContext):
-    await safe_answer(cb)
     if not store_open() and not is_admin(cb.from_user.id):
-        return await cb.answer("⚠️ المتجر مغلق.", show_alert=True)
+        return await cb.answer("⚠️ المتجر مغلق حالياً.", show_alert=True)
 
     pid = cb.data.split("_")[1]
     api = await fetch_product(pid)
@@ -1595,6 +1594,12 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
     ptype = pdata.get("product_type", row[6] if row else "digital")
     if not available:
         return await cb.answer("❌ المنتج غير متوفر حالياً.", show_alert=True)
+
+    current_balance = user_init(cb.from_user.id)
+    if str(ptype).lower() != "amount" and current_balance < price:
+        return await cb.answer(f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${price:.4f}", show_alert=True)
+
+    await safe_answer(cb)
 
     qtys_from_desc = extract_quantities_from_text(desc)
 
@@ -1623,24 +1628,22 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
             await safe_send(cb.from_user.id, f"🛒 <b>{esc(name)}</b>\nأرسل الكمية المطلوبة كتابةً:", reply_markup=cancel_kb)
             return
 
-    if user_init(cb.from_user.id) < price:
-        return await cb.answer("❌ رصيدك غير كافٍ!", show_alert=True)
-
     await state.update_data({"qty": 1, "total": price})
     await next_buy_step(cb.from_user.id, state)
 
 
 @dp.callback_query(F.data.startswith("setqty_"), ClientStates.wait_for_qty)
 async def select_qty_from_button(cb: types.CallbackQuery, state: FSMContext):
-    await safe_answer(cb)
     try:
         q = float(cb.data.split("_")[1])
     except ValueError:
         return await cb.answer("قيمة غير صالحة.", show_alert=True)
     d = await state.get_data()
     total = q * float(d["unit_price"])
-    if user_init(cb.from_user.id) < total:
-        return await cb.answer(f"❌ رصيدك غير كافٍ! المطلوب ${total:.4f}", show_alert=True)
+    current_balance = user_init(cb.from_user.id)
+    if current_balance < total:
+        return await cb.answer(f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${total:.4f}", show_alert=True)
+    await safe_answer(cb)
     await state.update_data({"qty": q, "total": total})
     await next_buy_step(cb.from_user.id, state)
 
@@ -1661,8 +1664,9 @@ async def qty(message: types.Message, state: FSMContext):
     if qtys_list and q not in qtys_list:
         return await safe_send(message.from_user.id, "❌ اختر من الأرقام المحددة فقط!")
     total = q * float(d["unit_price"])
-    if user_init(message.from_user.id) < total:
-        return await safe_send(message.from_user.id, f"❌ رصيدك غير كافٍ. المطلوب ${total:.4f}")
+    current_balance = user_init(message.from_user.id)
+    if current_balance < total:
+        return await safe_send(message.from_user.id, f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${total:.4f}")
     await state.update_data({"qty": q, "total": total})
     await next_buy_step(message.from_user.id, state)
 
