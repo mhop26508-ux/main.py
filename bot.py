@@ -122,7 +122,11 @@ def init_db():
 
     c.execute("""CREATE TABLE IF NOT EXISTS users(
         user_id BIGINT PRIMARY KEY, username TEXT,
-        balance REAL DEFAULT 0, is_admin BOOLEAN DEFAULT FALSE)""")
+        balance REAL DEFAULT 0, is_admin BOOLEAN DEFAULT FALSE,
+        is_banned BOOLEAN DEFAULT FALSE)""")
+
+    # للتأكد من وجود عمود is_banned في حال كان الجدول منشأ سابقاً
+    c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE")
 
     c.execute("""CREATE TABLE IF NOT EXISTS categories(
         id SERIAL PRIMARY KEY, name TEXT)""")
@@ -191,6 +195,42 @@ def is_admin(uid):
     return bool(row and row[0])
 
 
+def is_user_banned(uid):
+    if uid == PRIMARY_ADMIN_ID:
+        return False
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT is_banned FROM users WHERE user_id=%s", (uid,))
+    row = c.fetchone()
+    c.close()
+    conn.close()
+    return bool(row and row[0])
+
+
+def set_user_ban_status(uid, status: bool):
+    conn = db()
+    c = conn.cursor()
+    c.execute("UPDATE users SET is_banned=%s WHERE user_id=%s", (status, uid))
+    ok = c.rowcount > 0
+    conn.commit()
+    c.close()
+    conn.close()
+    return ok
+
+
+def get_all_admins():
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE is_admin=TRUE")
+    rows = c.fetchall()
+    c.close()
+    conn.close()
+    admin_set = {PRIMARY_ADMIN_ID}
+    for (r,) in rows:
+        admin_set.add(r)
+    return list(admin_set)
+
+
 def store_open():
     conn = db()
     c = conn.cursor()
@@ -250,7 +290,7 @@ def user_init(uid, username=""):
     row = c.fetchone()
     if row is None:
         bal = 1000000.0 if uid == PRIMARY_ADMIN_ID else 0.0
-        c.execute("INSERT INTO users(user_id, username, balance, is_admin) VALUES(%s, %s, %s, %s)",
+        c.execute("INSERT INTO users(user_id, username, balance, is_admin, is_banned) VALUES(%s, %s, %s, %s, FALSE)",
                   (uid, username, bal, uid == PRIMARY_ADMIN_ID))
     else:
         bal = float(row[0] or 0)
@@ -265,11 +305,11 @@ def user_init(uid, username=""):
 def get_user(uid):
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT username, balance FROM users WHERE user_id=%s", (uid,))
+    c.execute("SELECT username, balance, is_banned FROM users WHERE user_id=%s", (uid,))
     row = c.fetchone()
     c.close()
     conn.close()
-    return {"username": row[0] or "", "balance": float(row[1] or 0)} if row else None
+    return {"username": row[0] or "", "balance": float(row[1] or 0), "is_banned": bool(row[2])} if row else None
 
 
 def add_balance(uid, amount):
@@ -573,12 +613,13 @@ class AdminStates(StatesGroup):
     add_prod_select_cat = State()
     add_prod_select_sub = State()
     add_prod_id = State()
-    add_prod_desc = State()
     wait_deposit_amount = State()
     wait_add_user = State()
     wait_add_amount = State()
     wait_deduct_user = State()
     wait_deduct_amount = State()
+    wait_ban_user = State()
+    wait_unban_user = State()
     wait_new_admin_id = State()
     wait_del_admin_id = State()
     wait_payment_info_edit = State()
@@ -597,6 +638,19 @@ class ClientStates(StatesGroup):
     wait_trans_id = State()
     wait_dep_amount = State()
     wait_product_search = State()
+
+
+# ================= التحقق العام من الحظر =================
+@dp.message.outer_middleware()
+async def ban_check_middleware(handler, event: types.TelegramObject, data: dict):
+    user = getattr(event, "from_user", None)
+    if user and is_user_banned(user.id):
+        if isinstance(event, types.Message):
+            await event.answer("🚫 <b>تم حظر حسابك من استخدام هذا البوت. يرجى التواصل مع الإدارة.</b>", parse_mode="HTML")
+        elif isinstance(event, types.CallbackQuery):
+            await event.answer("🚫 تم حظر حسابك من البوت.", show_alert=True)
+        return
+    return await handler(event, data)
 
 
 # ================= لوحات المفاتيح =================
@@ -621,15 +675,16 @@ def admin_kb():
         # إدارة الألعاب
         [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
         # إدارة المنتجات
-        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="🔄 تفعيل / تعطيل منتج", style="primary"), types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary")],
-        [types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
-        # الرصيد والأسعار
+        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="🔄 تفعيل / تعطيل منتج", style="primary")],
+        [types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
+        # المالية والأرصدة
         [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
         [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
-        # إدارة المتجر والطلبات
-        [types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger"), types.KeyboardButton(text="📋 الطلبات الكلية", style="primary"), types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary")],
-        # الأدمن وطرق الدفع والاتصال
+        # إدارة الأعضاء والحظر
+        [types.KeyboardButton(text="🚫 حظر مستخدم", style="danger"), types.KeyboardButton(text="🟢 فك حظر مستخدم", style="success")],
         [types.KeyboardButton(text="👤 إضافة أدمن جديد", style="primary"), types.KeyboardButton(text="🚫 إزالة أدمن", style="danger")],
+        # النظام والإحصائيات
+        [types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger"), types.KeyboardButton(text="📋 الطلبات الكلية", style="primary"), types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary")],
         [types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"), types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary")],
         [types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary"), types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
     ]
@@ -981,6 +1036,62 @@ async def download_pdf_cb(cb: types.CallbackQuery):
         await cb.answer("❌ حدث خطأ أثناء إنشاء ملف PDF.", show_alert=True)
 
 
+# ================= نظام حظر وفك حظر المستخدمين =================
+@dp.message(F.text == "🚫 حظر مستخدم")
+async def ban_user_start(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+    await safe_send(message.from_user.id, "🚫 <b>أرسل User ID الخاص بالمستخدم المراد حظره:</b>", reply_markup=cancel_kb)
+    await state.set_state(AdminStates.wait_ban_user)
+
+
+@dp.message(AdminStates.wait_ban_user)
+async def ban_user_finish(message: types.Message, state: FSMContext):
+    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
+        await state.clear()
+        return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=admin_kb())
+    if not message.text.strip().isdigit():
+        return await safe_send(message.from_user.id, "❌ يرجى إرسال آيدي رقمي صحيح.")
+    uid = int(message.text.strip())
+    if uid == PRIMARY_ADMIN_ID or is_admin(uid):
+        return await safe_send(message.from_user.id, "❌ لا يمكن حظر الأدمن أو المالك.")
+    
+    ok = set_user_ban_status(uid, True)
+    await state.clear()
+    if ok:
+        await safe_send(message.from_user.id, f"✅ <b>تم حظر المستخدم بنجاح!</b> (ID: <code>{uid}</code>)", reply_markup=admin_kb())
+        await safe_send(uid, "🚫 <b>تم حظر حسابك من قبل إدارة المتجر.</b>")
+    else:
+        await safe_send(message.from_user.id, f"❌ المستخدم <code>{uid}</code> غير مسجل في قاعدة البيانات.", reply_markup=admin_kb())
+
+
+@dp.message(F.text == "🟢 فك حظر مستخدم")
+async def unban_user_start(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+    await safe_send(message.from_user.id, "🟢 <b>أرسل User ID الخاص بالمستخدم المراد فك الحظر عنه:</b>", reply_markup=cancel_kb)
+    await state.set_state(AdminStates.wait_unban_user)
+
+
+@dp.message(AdminStates.wait_unban_user)
+async def unban_user_finish(message: types.Message, state: FSMContext):
+    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
+        await state.clear()
+        return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=admin_kb())
+    if not message.text.strip().isdigit():
+        return await safe_send(message.from_user.id, "❌ يرجى إرسال آيدي رقمي صحيح.")
+    uid = int(message.text.strip())
+    ok = set_user_ban_status(uid, False)
+    await state.clear()
+    if ok:
+        await safe_send(message.from_user.id, f"✅ <b>تم فك الحظر عن المستخدم بنجاح!</b> (ID: <code>{uid}</code>)", reply_markup=admin_kb())
+        await safe_send(uid, "🎉 <b>تم رفع الحظر عن حسابك، يمكنك الآن استخدام البوت بحرية!</b>", reply_markup=main_kb(uid))
+    else:
+        await safe_send(message.from_user.id, f"❌ المستخدم <code>{uid}</code> غير مسجل في قاعدة البيانات.", reply_markup=admin_kb())
+
+
 # ================= الإذاعة =================
 @dp.message(F.text == "📢 إرسال رسالة للكل")
 async def broadcast_start(message: types.Message, state: FSMContext):
@@ -1002,7 +1113,7 @@ async def broadcast_execute(message: types.Message, state: FSMContext):
 
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT user_id FROM users")
+    c.execute("SELECT user_id FROM users WHERE is_banned=FALSE")
     users_rows = c.fetchall()
     c.close()
     conn.close()
@@ -1368,13 +1479,11 @@ async def show_product(cb: types.CallbackQuery):
     if not api and not row:
         return await cb.answer("المنتج غير موجود.", show_alert=True)
 
-    # التحقق من توفر المنتج محلياً من قاعدة البيانات أولاً
     local_available = bool(row[2]) if row else True
 
     if api:
         name = row[0] if row else (api.get("name") or "غير محدد")
         price = float(api.get("price", 0) or 0)
-        # المنتج يكون متاحاً فقط إذا كان متاحاً في الموقع والمشرف لم يقم بتعطيله محلياً
         available = bool(api.get("available", True)) and local_available
         ptype = api.get("product_type", "digital")
         pdata = api
@@ -1762,7 +1871,14 @@ async def deposit_menu(message: types.Message, state: FSMContext):
     
     keyboard = []
     for code, name in rows:
-        style = "danger" if code == "syriatel" else ("success" if code in ("bep20", "binance", "sham_usd") else "primary")
+        if code == "sham_usd":
+            style = "primary"  # باللون الأزرق
+        elif code == "syriatel":
+            style = "danger"
+        elif code in ("bep20", "binance"):
+            style = "success"
+        else:
+            style = "primary"
         keyboard.append([types.InlineKeyboardButton(text=f"💳 {name}", callback_data=f"pay_{code}", style=style)])
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -1909,15 +2025,19 @@ async def dep_amount(message: types.Message, state: FSMContext):
     )
 
     username = f"@{u['username']}" if u and u["username"] else "بدون username"
-    await safe_send(
-        PRIMARY_ADMIN_ID,
+    deposit_notification_text = (
         f"🔔 <b>طلب شحن رصيد جديد</b>\n\n"
         f"👤 العميل: {esc(username)} (<code>{message.from_user.id}</code>)\n"
         f"💳 وسيلة الدفع: {esc(method_display_name)}\n"
         f"🔢 رقم العملية: <code>{esc(trans)}</code>\n"
-        f"💵 المبلغ المحول: {amount_txt}",
-        kb
+        f"💵 المبلغ المحول: {amount_txt}"
     )
+
+    # إرسال طلب الشحن لجميع الأدمنية والمالك
+    admins_list = get_all_admins()
+    for admin_id in admins_list:
+        await safe_send(admin_id, deposit_notification_text, kb)
+
     await safe_send(message.from_user.id, "✅ تم إرسال طلب الشحن للإدارة بنجاح، ستتم إضافة الرصيد إلى حسابك فور المراجعة.", reply_markup=main_kb(message.from_user.id))
     await state.clear()
 
@@ -1981,7 +2101,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await state.clear()
-    await safe_send(message.from_user.id, "🛠️ لوحة الإدارة الرئيسية:", reply_markup=admin_kb())
+    await safe_send(message.from_user.id, "🛠️ <b>لوحة الإدارة الرئيسية:</b>", reply_markup=admin_kb())
 
 
 @dp.message(F.text == "➕ إضافة رصيد لعميل")
@@ -2988,6 +3108,7 @@ async def sub_delete(cb: types.CallbackQuery):
             raise e
 
 
+# ================= إضافة المنتجات المتعددة بالتتالي =================
 @dp.message(F.text.startswith("➕ إضافة منتجات"))
 async def product_add_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -3036,63 +3157,70 @@ async def product_add_sub(message: types.Message, state: FSMContext):
     if not row:
         return await safe_send(message.from_user.id, "❌ اختيار خاطئ.")
     await state.update_data({"sub_id": row[0]})
-    await safe_send(message.from_user.id, "أرسل ID المنتج من الموقع:")
+    
+    stop_kb = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="✅ إنهاء إضافة المنتجات", style="success")],
+            [types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
+        ],
+        resize_keyboard=True
+    )
+    await safe_send(
+        message.from_user.id,
+        "🔢 <b>أرسل معرّف ID المنتج من الموقع:</b>\n\n"
+        "💡 <i>يمكنك إرسال ID واحد أو عدة آيديات معاً مفصولة بمسافة (مثلاً: <code>101 102 103</code>)، وسيتم إضافتها ويبقى البوت في وضع الاستقبال حتى تضغط زر الإنهاء.</i>",
+        reply_markup=stop_kb
+    )
     await state.set_state(AdminStates.add_prod_id)
 
 
 @dp.message(AdminStates.add_prod_id)
-async def product_fetch(message: types.Message, state: FSMContext):
-    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
-        return await back_main(message, state)
-    pid = message.text.strip()
-    if not pid.isdigit():
-        return await safe_send(message.from_user.id, "❌ أرسل أرقاماً فقط.")
-    await safe_send(message.from_user.id, "🔄 جاري جلب المنتج...")
-    api = await fetch_product(pid)
-    if not api:
-        return await safe_send(message.from_user.id, "❌ المنتج غير موجود.")
-    if product(api.get("id", pid)):
-        return await safe_send(message.from_user.id, "⚠️ المنتج موجود مسبقاً.")
+async def product_fetch_multi(message: types.Message, state: FSMContext):
+    if message.text in ("✅ إنهاء إضافة المنتجات", "🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
+        await state.clear()
+        return await safe_send(message.from_user.id, "✅ تم إنهاء عملية إضافة المنتجات بنجاح.", reply_markup=admin_kb())
 
-    await state.update_data({"temp_api": api, "temp_pid": pid})
-    await safe_send(
-        message.from_user.id,
-        f"📦 <b>{esc(api.get('name','غير محدد'))}</b>\n"
-        f"💲 السعر مع الزيادة: ${float(api.get('price',0) or 0):.4f}\n\n"
-        "أرسل الوصف أو اكتب «تخطي الوصف»."
-    )
-    await state.set_state(AdminStates.add_prod_desc)
+    raw_text = message.text.strip()
+    id_list = re.findall(r'\d+', raw_text)
+    if not id_list:
+        return await safe_send(message.from_user.id, "❌ يرجى إرسال أرقام ID صحيحة.")
 
-
-@dp.message(AdminStates.add_prod_desc)
-async def product_save(message: types.Message, state: FSMContext):
-    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
-        return await back_main(message, state)
-    desc = "" if message.text.strip() == "تخطي الوصف" else message.text.strip()
     d = await state.get_data()
-    api = d["temp_api"]
     sub_id = d["sub_id"]
-    pid = d["temp_pid"]
-    base_price = float(api.get("price", 0) or 0)
 
-    conn = db()
-    c = conn.cursor()
-    c.execute("""INSERT INTO products
-                    (mhd_id, name, price, product_type, available, stock, min_qty, max_qty, sub_id, description, api_data)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                 (int(pid), api.get("name", "غير محدد"), base_price,
-                  api.get("product_type", "digital"),
-                  bool(api.get("available", True)),
-                  int(api.get("stock", 999) or 999),
-                  float(api.get("min_qty", 1) or 1),
-                  float(api.get("max_qty", 1000) or 1000),
-                  sub_id, desc, json.dumps(api)))
-    conn.commit()
-    c.close()
-    conn.close()
+    status_report = []
 
-    await safe_send(message.from_user.id, f"✅ تمت إضافة المنتج: {esc(api.get('name'))}", reply_markup=admin_kb())
-    await state.clear()
+    for pid in id_list:
+        if product(pid):
+            status_report.append(f"⚠️ المنتج <code>{pid}</code>: موجود مسبقاً.")
+            continue
+
+        api = await fetch_product(pid)
+        if not api:
+            status_report.append(f"❌ المنتج <code>{pid}</code>: غير موجود بالموقع.")
+            continue
+
+        base_price = float(api.get("price", 0) or 0)
+        p_name = api.get("name", "غير محدد")
+        conn = db()
+        c = conn.cursor()
+        c.execute("""INSERT INTO products
+                        (mhd_id, name, price, product_type, available, stock, min_qty, max_qty, sub_id, description, api_data)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                     (int(pid), p_name, base_price,
+                      api.get("product_type", "digital"),
+                      bool(api.get("available", True)),
+                      int(api.get("stock", 999) or 999),
+                      float(api.get("min_qty", 1) or 1),
+                      float(api.get("max_qty", 1000) or 1000),
+                      sub_id, "", json.dumps(api)))
+        conn.commit()
+        c.close()
+        conn.close()
+        status_report.append(f"✅ تمت إضافة: <b>{esc(p_name)}</b> (<code>{pid}</code>)")
+
+    status_report.append("\n👉 <b>أرسل معرّف ID آخر للمتابعة، أو اضغط «إنهاء إضافة المنتجات»:</b>")
+    await safe_send(message.from_user.id, "\n".join(status_report))
 
 
 @dp.message(F.text == "🗑️ حذف منتج من لعبة")
@@ -3177,4 +3305,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
