@@ -1830,7 +1830,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
                 accept_once(oid, rep)
                 text = f"🎉 <b>تم اكتمال طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
-                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(rep)}</code>\n"
+                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(clean_rep)}</code>\n"
             else:
                 text = f"✅ <b>تم استلام طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
@@ -3298,6 +3298,13 @@ async def product_delete(cb: types.CallbackQuery):
 async def main():
     init_db()
     await start_web_server()
+    
+    # حذف أي Webhook قديم معلق لتفادي TelegramConflictError
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"⚠️ تحذير مسح الويب هوك: {e}")
+
     try:
         await bot.set_my_commands([types.BotCommand(command="start", description="بدء تشغيل البوت والعودة للرئيسية")])
     except Exception as e:
@@ -3309,3 +3316,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
