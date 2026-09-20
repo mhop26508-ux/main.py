@@ -24,13 +24,22 @@ from reportlab.pdfgen import canvas
 
 # ================= الإعدادات =================
 BOT_TOKEN = "8998872085:AAHOxb1Hny7c_8P0MTu2-lqObx-DX1AZr1s"
-MHD_API_TOKEN = "T7um19tGzZVl2sdz09Z8WnlojsWn8TLDNwFrxT1qcvTBJgk6wtuxI6v9miom"
+
+SERVERS_CONFIG = {
+    "server_1": {
+        "name": "سيرفر 1 (سريع)",
+        "base_url": "https://mhd-game.com/api",
+        "api_token": "T7um19tGzZVl2sdz09Z8WnlojsWn8TLDNwFrxT1qcvTBJgk6wtuxI6v9miom"
+    },
+    "server_2": {
+        "name": "سيرفر 2 (وسيم)",
+        "base_url": "https://wasiimstore.com/api",
+        "api_token": "meZDw2agWlbywiaAW2WQQcjouFC8ClzA20SE95NljL0eY3rPLUW3bnCSA4OE"
+    }
+}
 
 PRIMARY_ADMIN_ID = 8090426575
 CHANNEL_USERNAME = "@SARE3_STOR"
-
-API_BASE_URL = "https://mhd-game.com/api"
-MHD_PRODUCTS_URL = f"{API_BASE_URL}/client/api/products"
 
 DATABASE_URL = "postgresql://postgres.qmgvtflvgvosgseqmelf:Mlpoknbji0%24570@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres"
 
@@ -125,7 +134,6 @@ def init_db():
         balance REAL DEFAULT 0, is_admin BOOLEAN DEFAULT FALSE,
         is_banned BOOLEAN DEFAULT FALSE)""")
 
-    # للتأكد من وجود عمود is_banned في حال كان الجدول منشأ سابقاً
     c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE")
 
     c.execute("""CREATE TABLE IF NOT EXISTS categories(
@@ -144,7 +152,10 @@ def init_db():
         id SERIAL PRIMARY KEY, order_uuid TEXT UNIQUE,
         user_id BIGINT, product_id INTEGER, product_name TEXT,
         price REAL, status TEXT, replay_api TEXT,
-        qty REAL DEFAULT 1, player_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        qty REAL DEFAULT 1, player_id TEXT, server_id TEXT DEFAULT 'server_1',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+
+    c.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS server_id TEXT DEFAULT 'server_1'")
 
     c.execute("""CREATE TABLE IF NOT EXISTS settings(
         key TEXT PRIMARY KEY, value TEXT)""")
@@ -159,7 +170,8 @@ def init_db():
         id SERIAL PRIMARY KEY, user_id BIGINT, amount REAL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
 
     c.execute("INSERT INTO settings(key, value) VALUES('store_status', 'open') ON CONFLICT (key) DO NOTHING")
-    c.execute("INSERT INTO settings(key, value) VALUES('store_margin_percent', '0') ON CONFLICT (key) DO NOTHING")
+    c.execute("INSERT INTO settings(key, value) VALUES('margin_server_1', '0') ON CONFLICT (key) DO NOTHING")
+    c.execute("INSERT INTO settings(key, value) VALUES('margin_server_2', '0') ON CONFLICT (key) DO NOTHING")
     c.execute("INSERT INTO settings(key, value) VALUES('exchange_rate', '15000') ON CONFLICT (key) DO NOTHING")
     c.execute("INSERT INTO settings(key, value) VALUES('support_contact', '@SARE3_570') ON CONFLICT (key) DO NOTHING")
     
@@ -241,17 +253,23 @@ def store_open():
     return not row or row[0] == "open"
 
 
-def get_margin_percent():
+def get_margin(server_key="server_1"):
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key='store_margin_percent'")
+    c.execute("SELECT value FROM settings WHERE key=%s", (f"margin_{server_key}",))
     row = c.fetchone()
     c.close()
     conn.close()
     try:
         return float(row[0]) if row else 0.0
-    except ValueError:
+    except (ValueError, TypeError):
         return 0.0
+
+
+def apply_margin_server(base_price, server_key="server_1"):
+    margin = get_margin(server_key)
+    base = float(base_price or 0)
+    return base * (1 + margin / 100.0)
 
 
 def get_exchange_rate():
@@ -275,12 +293,6 @@ def get_support_contact():
     c.close()
     conn.close()
     return row[0] if row and row[0] else "@SARE3_570"
-
-
-def apply_margin(base_price):
-    margin = get_margin_percent()
-    base = float(base_price or 0)
-    return base * (1 + margin / 100.0)
 
 
 def user_init(uid, username=""):
@@ -537,9 +549,10 @@ def matching_order(payload, wanted_uuid):
     return payload if isinstance(payload, dict) else None
 
 
-async def check_order_api(order_uuid, client=None):
-    url = f"{API_BASE_URL}/client/api/check?orders=[{urllib.parse.quote(str(order_uuid), safe='')}]&uuid=1"
-    headers = {"api-token": MHD_API_TOKEN, "Accept": "application/json"}
+async def check_order_api(order_uuid, server_id="server_1", client=None):
+    server_info = SERVERS_CONFIG.get(server_id, SERVERS_CONFIG["server_1"])
+    url = f"{server_info['base_url']}/client/api/check?orders=[{urllib.parse.quote(str(order_uuid), safe='')}]&uuid=1"
+    headers = {"api-token": server_info["api_token"], "Accept": "application/json"}
     own = client is None
     client = client or session(15)
     try:
@@ -626,7 +639,8 @@ class AdminStates(StatesGroup):
     wait_new_pay_code = State()
     wait_new_pay_name = State()
     wait_new_pay_info = State()
-    edit_price_percentage = State()
+    edit_margin_server_1 = State()
+    edit_margin_server_2 = State()
     edit_exchange_rate = State()
     wait_search_player_id = State()
     broadcast_message = State()
@@ -667,34 +681,32 @@ def main_kb(uid):
 
 def admin_kb():
     state_txt = "🟢 مفتوح" if store_open() else "🔴 مغلق"
-    margin = get_margin_percent()
+    margin1 = get_margin("server_1")
+    margin2 = get_margin("server_2")
     rate = get_exchange_rate()
     kb = [
-        # إدارة الأقسام
         [types.KeyboardButton(text="➕ إضافة قسم رئيسي", style="success"), types.KeyboardButton(text="✏️ تعديل اسم قسم", style="primary"), types.KeyboardButton(text="🗑️ إزالة قسم رئيسي", style="danger")],
-        # إدارة الألعاب
         [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
-        # إدارة المنتجات
         [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="🔄 تفعيل / تعطيل منتج", style="primary")],
         [types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
-        # المالية والأرصدة
         [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
-        [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
-        # إدارة الأعضاء والحظر
+        [types.KeyboardButton(text=f"📈 أرباح سيرفر 1 ({margin1:g}%)", style="primary"), types.KeyboardButton(text=f"📈 أرباح سيرفر 2 ({margin2:g}%)", style="primary")],
+        [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary")],
         [types.KeyboardButton(text="🚫 حظر مستخدم", style="danger"), types.KeyboardButton(text="🟢 فك حظر مستخدم", style="success")],
         [types.KeyboardButton(text="👤 إضافة أدمن جديد", style="primary"), types.KeyboardButton(text="🚫 إزالة أدمن", style="danger")],
-        # النظام والإحصائيات
         [types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger"), types.KeyboardButton(text="📋 الطلبات الكلية", style="primary"), types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary")],
-        [types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"), types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary")],
-        [types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary"), types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
+        [types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"), types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary")],
+        [types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
     ]
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-async def fetch_product(pid):
+async def fetch_product(pid, server_id="server_1"):
+    server_info = SERVERS_CONFIG.get(server_id, SERVERS_CONFIG["server_1"])
+    prod_url = f"{server_info['base_url']}/client/api/products"
     try:
         async with session(15) as s:
-            async with s.get(MHD_PRODUCTS_URL, headers={"api-token": MHD_API_TOKEN}) as r:
+            async with s.get(prod_url, headers={"api-token": server_info["api_token"]}) as r:
                 raw = await r.text()
                 if r.status != 200:
                     return None
@@ -722,8 +734,6 @@ async def fetch_product(pid):
                 x = p.get("id") or p.get("product_id") or p.get("productId")
                 if str(x) == str(pid):
                     p_copy = dict(p)
-                    if "price" in p_copy:
-                        p_copy["price"] = apply_margin(p_copy["price"])
                     return p_copy
     except Exception:
         pass
@@ -751,9 +761,9 @@ def required_params(data):
     player_id_keys = ["player_id_required", "require_player_id", "playerId_required", "need_player_id", "is_player_id", "require_id"]
     if any(is_true(data.get(k)) for k in player_id_keys):
         out.append("Player ID")
-    zone_id_keys = ["require_zone_id", "has_zone_id", "zone_id_required", "need_zone_id", "is_zone_id", "server_id_required"]
+    zone_id_keys = ["require_zone_id", "has_zone_id", "zone_id_required", "need_zone_id", "is_zone_id", "server_id_required", "anyKey_required"]
     if any(is_true(data.get(k)) for k in zone_id_keys):
-        out.append("Zone ID")
+        out.append("Zone ID / anyKey")
     ptype = str(data.get("product_type") or data.get("type") or "").lower()
     pname = str(data.get("name") or "").lower()
     keywords = ["شدة", "شدات", "uc", "pubg", "ببجي", "free fire", "جواهر", "id", "player", "game", "topup"]
@@ -899,7 +909,7 @@ async def search_product_execute(message: types.Message, state: FSMContext):
 
     btn_list = []
     for pid, name, base_price in rows:
-        p_final = apply_margin(base_price)
+        p_final = apply_margin_server(base_price, "server_1")
         btn_list.append(types.InlineKeyboardButton(text=f"📦 {name} (${p_final:.4f})", callback_data=f"show_{pid}", style="primary"))
     
     keyboard = chunk_buttons(btn_list, 2)
@@ -1145,7 +1155,7 @@ async def my_orders(message: types.Message):
     sup_contact = get_support_contact()
     conn = db()
     c = conn.cursor()
-    c.execute("""SELECT id, order_uuid, product_name, price, status, replay_api, qty, player_id, created_at
+    c.execute("""SELECT id, order_uuid, product_name, price, status, replay_api, qty, player_id, created_at, server_id
                            FROM orders WHERE user_id=%s ORDER BY id DESC LIMIT 5""", (message.from_user.id,))
     rows = c.fetchall()
     c.close()
@@ -1154,14 +1164,16 @@ async def my_orders(message: types.Message):
     if not rows:
         return await safe_send(message.from_user.id, f"ليس لديك أي طلبات سابقة.\n\nللدعم: {esc(sup_contact)}")
 
-    for oid, ouuid, name, price, st, rep, qty, player, created_at in rows:
+    for oid, ouuid, name, price, st, rep, qty, player, created_at, s_id in rows:
         status_txt = "🟢 مكتمل" if accepted(st) else ("🔴 مرفوض" if rejected(st) else "⏳ قيد الانتظار")
         qty_val = float(qty or 1)
         total_price = float(price or 0)
         unit_price = total_price / qty_val if qty_val > 0 else total_price
+        srv_name = SERVERS_CONFIG.get(s_id, {}).get("name", "سيرفر 1")
 
         order_card = (
             f"📦 <b>المنتج:</b> {esc(name)}\n"
+            f"🌐 <b>السيرفر:</b> {esc(srv_name)}\n"
             f"🔢 <b>رقم الطلب:</b> #{oid}\n"
             f"📊 <b>الحالة:</b> {status_txt}\n"
         )
@@ -1195,7 +1207,7 @@ def build_admin_orders_view(page=1, search_query=None):
             search_uid = int(str(search_query).strip())
             count_query = "SELECT COUNT(*) FROM orders WHERE player_id ILIKE %s OR user_id = %s"
             orders_query = """
-                SELECT id, order_uuid, user_id, product_name, price, status, replay_api, qty, player_id, created_at
+                SELECT id, order_uuid, user_id, product_name, price, status, replay_api, qty, player_id, created_at, server_id
                 FROM orders WHERE player_id ILIKE %s OR user_id = %s ORDER BY id DESC LIMIT %s OFFSET %s
             """
             params_count = (f"%{search_query}%", search_uid)
@@ -1203,7 +1215,7 @@ def build_admin_orders_view(page=1, search_query=None):
         else:
             count_query = "SELECT COUNT(*) FROM orders WHERE player_id ILIKE %s"
             orders_query = """
-                SELECT id, order_uuid, user_id, product_name, price, status, replay_api, qty, player_id, created_at
+                SELECT id, order_uuid, user_id, product_name, price, status, replay_api, qty, player_id, created_at, server_id
                 FROM orders WHERE player_id ILIKE %s ORDER BY id DESC LIMIT %s OFFSET %s
             """
             params_count = (f"%{search_query}%",)
@@ -1217,7 +1229,7 @@ def build_admin_orders_view(page=1, search_query=None):
         cur.execute("SELECT COUNT(*) FROM orders")
         total_count = cur.fetchone()[0]
         cur.execute("""
-            SELECT id, order_uuid, user_id, product_name, price, status, replay_api, qty, player_id, created_at
+            SELECT id, order_uuid, user_id, product_name, price, status, replay_api, qty, player_id, created_at, server_id
             FROM orders ORDER BY id DESC LIMIT %s OFFSET %s
         """, (PER_PAGE, offset))
         rows = cur.fetchall()
@@ -1243,13 +1255,15 @@ def build_admin_orders_view(page=1, search_query=None):
     text += f"الصفحة {page} من {total_pages}\n"
     text += "-----------------------------------\n\n"
 
-    for oid, ouuid, uid, name, price, st, rep, qty, player, created_at in rows:
+    for oid, ouuid, uid, name, price, st, rep, qty, player, created_at, s_id in rows:
         status_txt = "🟢 مكتمل" if accepted(st) else ("🔴 مرفوض" if rejected(st) else "⏳ قيد الانتظار")
         qty_val = float(qty or 1)
         total_price = float(price or 0)
+        srv_name = SERVERS_CONFIG.get(s_id, {}).get("name", "سيرفر 1")
 
         text += (
             f"🆔 <b>رقم الطلب:</b> #{oid}\n"
+            f"🌐 <b>السيرفر:</b> {esc(srv_name)}\n"
             f"👤 <b>آيدي العميل:</b> <code>{uid}</code>\n"
             f"📦 <b>المنتج:</b> {esc(name)}\n"
             f"📊 <b>الحالة:</b> {status_txt}\n"
@@ -1279,7 +1293,7 @@ def build_admin_orders_view(page=1, search_query=None):
     if search_query:
         inline_keyboard.append([types.InlineKeyboardButton(text="🔄 إلغاء التصفية (عرض الكل)", callback_data="admin_orders_page_1", style="danger")])
 
-    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
     return text, kb
 
 
@@ -1474,38 +1488,26 @@ async def show_product(cb: types.CallbackQuery):
     pid = parts[1]
     sid = parts[2] if len(parts) > 2 else None
 
-    api = await fetch_product(pid)
     row = product(pid)
-    if not api and not row:
+    api1 = await fetch_product(pid, "server_1")
+    if not row and not api1:
         return await cb.answer("المنتج غير موجود.", show_alert=True)
 
-    local_available = bool(row[2]) if row else True
-
-    if api:
-        name = row[0] if row else (api.get("name") or "غير محدد")
-        price = float(api.get("price", 0) or 0)
-        available = bool(api.get("available", True)) and local_available
-        ptype = api.get("product_type", "digital")
-        pdata = api
-        desc = row[7] if row else ""
-    else:
-        name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data = row
-        price = apply_margin(base_p)
-        available = bool(db_avail)
-        pdata = db_product_data(row)
-
+    name = row[0] if row else (api1.get("name") if api1 else "غير محدد")
+    desc = row[7] if row else ""
+    pdata = db_product_data(row) if row else api1
     params = required_params(pdata)
     req = " و ".join(params) if params else "⚡ تسليم فوري (لا يتطلب مدخلات)"
-    ptxt = f"${price:.4f}" if str(ptype).lower() != "amount" else f"${price:.4f} للوحدة"
+    local_available = bool(row[2]) if row else True
 
     text = (
         f"📦 <b>المنتج:</b> {esc(name)}\n"
-        f"💰 <b>السعر:</b> {ptxt}\n"
-        f"📊 <b>الحالة:</b> {'🟢 متوفر' if available else '🔴 غير متوفر'}\n"
+        f"📊 <b>الحالة:</b> {'🟢 متوفر' if local_available else '🔴 غير متوفر'}\n"
     )
     if desc:
         text += f"ℹ️ <b>الوصف:</b> {esc(desc)}\n"
-    text += f"📝 <b>المطلوب:</b> {esc(req)}"
+    text += f"📝 <b>المطلوب:</b> {esc(req)}\n\n"
+    text += "اضغط على <b>«🛒 شراء الآن»</b> لعرض الأسعار واختيار السيرفر المناسب."
 
     conn = db()
     c = conn.cursor()
@@ -1515,8 +1517,8 @@ async def show_product(cb: types.CallbackQuery):
     conn.close()
 
     keyboard = []
-    if available:
-        keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"buy_{pid}", style="success")])
+    if local_available:
+        keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"selectsrv_{pid}", style="success")])
     if in_wish:
         keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}", style="danger")])
     else:
@@ -1532,81 +1534,94 @@ async def show_product(cb: types.CallbackQuery):
             raise e
 
 
-# ================= الشراء والإنهاء =================
-async def next_buy_step(user_id: int, state: FSMContext):
-    d = await state.get_data()
-    idx = d.get("idx", 0)
-    params = d.get("params", [])
-
-    if idx < len(params):
-        cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
-        text = f"👉 أرسل <b>{esc(params[idx])}</b> المطلوبة الآن:"
-        await safe_send(user_id, text, reply_markup=cancel_kb)
-        await state.set_state(ClientStates.wait_for_param)
-        return
-
-    answers = d.get("answers", {})
-    details = ("\n".join(f"🔸 {esc(k)}: <code>{esc(v)}</code>" for k, v in answers.items()) if answers else "⚡ لا توجد بيانات مطلوبة")
-    qty_txt = (f"🔢 الكمية/المبلغ: {float(d['qty']):g}\n" if str(d["ptype"]).lower() == "amount" else "")
-    text = (
-        "🧾 <b>مراجعة الطلب:</b>\n\n"
-        f"📦 المنتج: {esc(d['name'])}\n"
-        f"{qty_txt}"
-        f"💵 الإجمالي: ${float(d['total']):.4f}\n\n"
-        f"📝 <b>البيانات:</b>\n{details}\n\n"
-        "هل أنت متأكد من الشراء؟"
-    )
-    kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [types.InlineKeyboardButton(text="🚀 تأكيد وإرسال الطلب", callback_data="confirm_api_order", style="success")],
-            [types.InlineKeyboardButton(text="❌ إلغاء الطلب", callback_data="cancel_order", style="danger")]
-        ]
-    )
-    await safe_send(user_id, text, reply_markup=kb)
-
-
-@dp.callback_query(F.data.startswith("buy_"))
-async def start_buy(cb: types.CallbackQuery, state: FSMContext):
+# ================= اختيار السيرفر مع السعر =================
+@dp.callback_query(F.data.startswith("selectsrv_"))
+async def select_server_for_product(cb: types.CallbackQuery, state: FSMContext):
     if not store_open() and not is_admin(cb.from_user.id):
         return await cb.answer("⚠️ المتجر مغلق حالياً.", show_alert=True)
 
+    await safe_answer(cb)
     pid = cb.data.split("_")[1]
-    api = await fetch_product(pid)
     row = product(pid)
+
+    # جلب أسعار السيرفرين في نفس الوقت
+    api1, api2 = await asyncio.gather(
+        fetch_product(pid, "server_1"),
+        fetch_product(pid, "server_2")
+    )
+
+    p1 = float(api1.get("price", 0)) if api1 and api1.get("price") else (float(row[1]) if row else 0.0)
+    avail1 = bool(api1.get("available", True)) if api1 else False
+    final_p1 = apply_margin_server(p1, "server_1")
+
+    p2 = float(api2.get("price", 0)) if api2 and api2.get("price") else 0.0
+    avail2 = bool(api2.get("available", True)) if api2 else False
+    final_p2 = apply_margin_server(p2, "server_2")
+
+    prod_name = row[0] if row else (api1.get("name") if api1 else "المنتج")
+
+    keyboard = []
+    if avail1 and final_p1 > 0:
+        keyboard.append([types.InlineKeyboardButton(text=f"🌐 سيرفر 1 (سريع) — ${final_p1:.4f}", callback_data=f"choose_{pid}_server_1", style="primary")])
+    else:
+        keyboard.append([types.InlineKeyboardButton(text="🌐 سيرفر 1 — ❌ غير متوفر", callback_data="none_1", style="danger")])
+
+    if avail2 and final_p2 > 0:
+        keyboard.append([types.InlineKeyboardButton(text=f"🌐 سيرفر 2 (وسيم) — ${final_p2:.4f}", callback_data=f"choose_{pid}_server_2", style="primary")])
+    else:
+        keyboard.append([types.InlineKeyboardButton(text="🌐 سيرفر 2 — ❌ غير متوفر", callback_data="none_2", style="danger")])
+
+    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data=f"show_{pid}", style="danger")])
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    try:
+        await cb.message.edit_text(
+            f"🛒 <b>شراء: {esc(prod_name)}</b>\n\n"
+            "يرجى اختيار السيرفر الذي ترغب بالشراء منه:",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("none_"))
+async def server_unavailable(cb: types.CallbackQuery):
+    await cb.answer("❌ هذا المنتج غير متوفر في هذا السيرفر حالياً.", show_alert=True)
+
+
+# ================= الشراء والإنهاء =================
+@dp.callback_query(F.data.startswith("choose_"))
+async def start_buy_flow(cb: types.CallbackQuery, state: FSMContext):
+    parts = cb.data.split("_")
+    pid = parts[1]
+    server_id = f"{parts[2]}_{parts[3]}"
+
+    row = product(pid)
+    api = await fetch_product(pid, server_id)
     if not api and not row:
         return await cb.answer("خطأ في بيانات المنتج.", show_alert=True)
 
-    local_available = bool(row[2]) if row else True
+    base_p = float(api.get("price", 0)) if api and api.get("price") else (float(row[1]) if row else 0.0)
+    price = apply_margin_server(base_p, server_id)
 
-    if api:
-        name = row[0] if row else api.get("name", "غير محدد")
-        price = float(api.get("price", 0) or 0)
-        desc = ""
-        pdata = api
-        available = bool(api.get("available", True)) and local_available
-    else:
-        name = row[0]
-        price = apply_margin(row[1])
-        desc = row[7] or ""
-        pdata = db_product_data(row)
-        available = local_available
-
+    name = row[0] if row else (api.get("name") if api else "غير محدد")
+    desc = row[7] if row else ""
+    pdata = api if api else db_product_data(row)
     ptype = pdata.get("product_type", row[6] if row else "digital")
-    if not available:
-        return await cb.answer("❌ المنتج غير متوفر حالياً.", show_alert=True)
 
     current_balance = user_init(cb.from_user.id)
     if str(ptype).lower() != "amount" and current_balance < price:
         return await cb.answer(f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${price:.4f}", show_alert=True)
 
     await safe_answer(cb)
-
     qtys_from_desc = extract_quantities_from_text(desc)
 
     await state.update_data({
         "pid": str(pid), "name": name, "unit_price": price,
         "ptype": ptype, "params": required_params(pdata), "idx": 0,
-        "answers": {}, "qtys_list": qtys_from_desc
+        "answers": {}, "qtys_list": qtys_from_desc, "server_id": server_id
     })
 
     if str(ptype).lower() == "amount":
@@ -1630,6 +1645,42 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
 
     await state.update_data({"qty": 1, "total": price})
     await next_buy_step(cb.from_user.id, state)
+
+
+async def next_buy_step(user_id: int, state: FSMContext):
+    d = await state.get_data()
+    idx = d.get("idx", 0)
+    params = d.get("params", [])
+
+    if idx < len(params):
+        cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+        text = f"👉 أرسل <b>{esc(params[idx])}</b> المطلوبة الآن:"
+        await safe_send(user_id, text, reply_markup=cancel_kb)
+        await state.set_state(ClientStates.wait_for_param)
+        return
+
+    selected_server = d.get("server_id", "server_1")
+    srv_name = SERVERS_CONFIG.get(selected_server, {}).get("name", "سيرفر 1")
+
+    answers = d.get("answers", {})
+    details = ("\n".join(f"🔸 {esc(k)}: <code>{esc(v)}</code>" for k, v in answers.items()) if answers else "⚡ لا توجد بيانات مطلوبة")
+    qty_txt = (f"🔢 الكمية/المبلغ: {float(d['qty']):g}\n" if str(d["ptype"]).lower() == "amount" else "")
+    text = (
+        "🧾 <b>مراجعة الطلب:</b>\n\n"
+        f"📦 المنتج: {esc(d['name'])}\n"
+        f"🌐 السيرفر المختار: <b>{esc(srv_name)}</b>\n"
+        f"{qty_txt}"
+        f"💵 الإجمالي: ${float(d['total']):.4f}\n\n"
+        f"📝 <b>البيانات:</b>\n{details}\n\n"
+        "هل أنت متأكد من الشراء؟"
+    )
+    kb = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(text="🚀 تأكيد وإرسال الطلب", callback_data="confirm_api_order", style="success")],
+            [types.InlineKeyboardButton(text="❌ إلغاء الطلب", callback_data="cancel_order", style="danger")]
+        ]
+    )
+    await safe_send(user_id, text, reply_markup=kb)
 
 
 @dp.callback_query(F.data.startswith("setqty_"), ClientStates.wait_for_qty)
@@ -1701,11 +1752,11 @@ async def cancel_order(cb: types.CallbackQuery, state: FSMContext):
 
 
 # ================= تتبع الطلب التلقائي =================
-async def track_single_order(ouuid, uid, oid, amount, name):
+async def track_single_order(ouuid, uid, oid, amount, name, server_id="server_1"):
     for attempt in range(1, 702):
         await asyncio.sleep(30)
         try:
-            result = await check_order_api(ouuid)
+            result = await check_order_api(ouuid, server_id=server_id)
             if not result:
                 continue
             st, rep = result["status"], result["replay"]
@@ -1751,6 +1802,8 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
     qty_value = float(d.get("qty", 1))
     name = d["name"]
     answers = list(d.get("answers", {}).values())
+    selected_server = d.get("server_id", "server_1")
+    srv_conf = SERVERS_CONFIG.get(selected_server, SERVERS_CONFIG["server_1"])
 
     conn = db()
     c = conn.cursor()
@@ -1770,7 +1823,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
             return
 
     try:
-        await cb.message.edit_text("🔄 جاري إرسال الطلب...")
+        await cb.message.edit_text(f"🔄 جاري إرسال الطلب عبر {srv_conf['name']}...")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise e
@@ -1785,11 +1838,11 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
     if any_key:
         params["anyKey"] = any_key
 
-    url = f"{API_BASE_URL}/client/api/newOrder/{urllib.parse.quote(pid, safe='')}/params?{urllib.parse.urlencode(params)}"
+    url = f"{srv_conf['base_url']}/client/api/newOrder/{urllib.parse.quote(pid, safe='')}/params?{urllib.parse.urlencode(params)}"
 
     try:
         async with session(20) as s:
-            async with s.get(url, headers={"api-token": MHD_API_TOKEN, "Accept": "application/json"}) as r:
+            async with s.get(url, headers={"api-token": srv_conf["api_token"], "Accept": "application/json"}) as r:
                 raw = await r.text()
                 http_status = r.status
         try:
@@ -1815,10 +1868,10 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
             conn = db()
             c = conn.cursor()
             c.execute("""INSERT INTO orders
-                           (order_uuid, user_id, product_id, product_name, price, status, replay_api, qty, player_id)
-                           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                           (order_uuid, user_id, product_id, product_name, price, status, replay_api, qty, player_id, server_id)
+                           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                            ON CONFLICT (order_uuid) DO NOTHING""",
-                        (ouuid, uid, int(pid) if pid.isdigit() else 0, name, total, api_status, rep, qty_value, player))
+                        (ouuid, uid, int(pid) if pid.isdigit() else 0, name, total, api_status, rep, qty_value, player, selected_server))
             c.execute("SELECT id FROM orders WHERE order_uuid=%s", (ouuid,))
             row = c.fetchone()
             oid = row[0] if row else 0
@@ -1828,11 +1881,11 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
 
             if accepted(api_status):
                 accept_once(oid, rep)
-                text = f"🎉 <b>تم اكتمال طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
+                text = f"🎉 <b>تم اكتمال طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n🌐 المزود: {esc(srv_conf['name'])}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
-                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(clean_rep)}</code>\n"
+                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(rep)}</code>\n"
             else:
-                text = f"✅ <b>تم استلام طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
+                text = f"✅ <b>تم استلام طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n🌐 المزود: {esc(srv_conf['name'])}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
                     text += f"📝 البيانات:\n<code>{esc(rep)}</code>\n"
                 text += "\n⏳ يجري تتبع الطلب وتحديث حالته تلقائياً..."
@@ -1844,7 +1897,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
                     raise e
 
             if not accepted(api_status) and not rejected(api_status):
-                asyncio.create_task(track_single_order(ouuid, uid, oid, total, name))
+                asyncio.create_task(track_single_order(ouuid, uid, oid, total, name, server_id=selected_server))
 
     except Exception:
         add_balance(uid, total)
@@ -1876,7 +1929,7 @@ async def deposit_menu(message: types.Message, state: FSMContext):
     keyboard = []
     for code, name in rows:
         if code == "sham_usd":
-            style = "primary"  # باللون الأزرق
+            style = "primary"
         elif code == "syriatel":
             style = "danger"
         elif code in ("bep20", "binance"):
@@ -2037,7 +2090,6 @@ async def dep_amount(message: types.Message, state: FSMContext):
         f"💵 المبلغ المحول: {amount_txt}"
     )
 
-    # إرسال طلب الشحن لجميع الأدمنية والمالك
     admins_list = get_all_admins()
     for admin_id in admins_list:
         await safe_send(admin_id, deposit_notification_text, kb)
@@ -2209,20 +2261,21 @@ async def toggle_store(message: types.Message):
     await safe_send(message.from_user.id, "🟢 تم فتح المتجر." if new == "open" else "🔴 تم إغلاق المتجر.", reply_markup=admin_kb())
 
 
-@dp.message(F.text.startswith("📈 تعديل أسعار"))
-async def edit_all_prices_start(message: types.Message, state: FSMContext):
+# ================= تعديل نسبة ربح السيرفرين بشكل منفصل =================
+@dp.message(F.text.startswith("📈 أرباح سيرفر 1"))
+async def edit_server1_margin_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    current_margin = get_margin_percent()
+    current_margin = get_margin("server_1")
     await safe_send(
         message.from_user.id,
-        f"📊 <b>تعديل أسعار المتجر بالكامل (%)</b>\n\nالنسبة الحالية: <b>{current_margin:g}%</b>\n\nأدخل النسبة الجديدة (مثال: أرسل 10 لزيادة 10% لكل 1$):"
+        f"📊 <b>تعديل نسبة ربح سيرفر 1 (سريع):</b>\n\nالنسبة الحالية: <b>{current_margin:g}%</b>\n\nأرسل النسبة المئوية الجديدة (مثال: أرسل 10 لإضافة 10%):"
     )
-    await state.set_state(AdminStates.edit_price_percentage)
+    await state.set_state(AdminStates.edit_margin_server_1)
 
 
-@dp.message(AdminStates.edit_price_percentage)
-async def edit_all_prices_finish(message: types.Message, state: FSMContext):
+@dp.message(AdminStates.edit_margin_server_1)
+async def edit_server1_margin_finish(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
@@ -2235,25 +2288,47 @@ async def edit_all_prices_finish(message: types.Message, state: FSMContext):
 
     conn = db()
     c = conn.cursor()
-    c.execute("INSERT INTO settings(key, value) VALUES('store_margin_percent', %s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (str(val),))
-    c.execute("SELECT id, price, api_data FROM products")
-    rows = c.fetchall()
-    for pid, base_p, api_data_str in rows:
-        orig_price = base_p
-        if api_data_str:
-            try:
-                adata = json.loads(api_data_str)
-                if "price" in adata and float(adata["price"]) > 0:
-                    orig_price = float(adata["price"])
-            except Exception:
-                pass
-        new_price = orig_price * (1 + val / 100.0)
-        c.execute("UPDATE products SET price=%s WHERE id=%s", (new_price, pid))
+    c.execute("INSERT INTO settings(key, value) VALUES('margin_server_1', %s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (str(val),))
     conn.commit()
     c.close()
     conn.close()
 
-    await safe_send(message.from_user.id, f"✅ <b>تم تحديث أسعار المتجر بنجاح!</b>\nالنسبة المطبقة: <b>{val:g}%</b>", reply_markup=admin_kb())
+    await safe_send(message.from_user.id, f"✅ <b>تم تحديث أرباح سيرفر 1 (سريع)!</b>\nالنسبة المعتمدة: <b>{val:g}%</b>", reply_markup=admin_kb())
+    await state.clear()
+
+
+@dp.message(F.text.startswith("📈 أرباح سيرفر 2"))
+async def edit_server2_margin_start(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    current_margin = get_margin("server_2")
+    await safe_send(
+        message.from_user.id,
+        f"📊 <b>تعديل نسبة ربح سيرفر 2 (وسيم):</b>\n\nالنسبة الحالية: <b>{current_margin:g}%</b>\n\nأرسل النسبة المئوية الجديدة (مثال: أرسل 10 لإضافة 10%):"
+    )
+    await state.set_state(AdminStates.edit_margin_server_2)
+
+
+@dp.message(AdminStates.edit_margin_server_2)
+async def edit_server2_margin_finish(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+    try:
+        val = float(message.text.strip().replace("%", ""))
+        if val < 0:
+            raise ValueError
+    except ValueError:
+        return await safe_send(message.from_user.id, "❌ يرجى كتابة رقم نسبة صحيح.")
+
+    conn = db()
+    c = conn.cursor()
+    c.execute("INSERT INTO settings(key, value) VALUES('margin_server_2', %s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (str(val),))
+    conn.commit()
+    c.close()
+    conn.close()
+
+    await safe_send(message.from_user.id, f"✅ <b>تم تحديث أرباح سيرفر 2 (وسيم)!</b>\nالنسبة المعتمدة: <b>{val:g}%</b>", reply_markup=admin_kb())
     await state.clear()
 
 
@@ -3199,9 +3274,12 @@ async def product_fetch_multi(message: types.Message, state: FSMContext):
             status_report.append(f"⚠️ المنتج <code>{pid}</code>: موجود مسبقاً.")
             continue
 
-        api = await fetch_product(pid)
+        api = await fetch_product(pid, "server_1")
         if not api:
-            status_report.append(f"❌ المنتج <code>{pid}</code>: غير موجود بالموقع.")
+            api = await fetch_product(pid, "server_2")
+            
+        if not api:
+            status_report.append(f"❌ المنتج <code>{pid}</code>: غير موجود بالموقعين.")
             continue
 
         base_price = float(api.get("price", 0) or 0)
@@ -3299,7 +3377,6 @@ async def main():
     init_db()
     await start_web_server()
     
-    # حذف أي Webhook قديم معلق لتفادي TelegramConflictError
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
@@ -3310,10 +3387,9 @@ async def main():
     except Exception as e:
         print(f"⚠️ خطأ تعيين القائمة: {e}")
 
-    print("🚀 Bot Started Successfully!")
+    print("🚀 Bot Started Successfully with Multi-Server Support & Distinct Server Margins!")
     asyncio.create_task(auto_send_deposits_pdf_task())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
