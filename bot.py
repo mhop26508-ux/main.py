@@ -142,11 +142,14 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS subcategories(
         id SERIAL PRIMARY KEY, name TEXT, cat_id INTEGER)""")
 
+    # إنشاء أو تعديل جدول المنتجات ليدعم الآيديات المنفصلة
     c.execute("""CREATE TABLE IF NOT EXISTS products(
         id SERIAL PRIMARY KEY, mhd_id BIGINT, name TEXT,
         price REAL, product_type TEXT, available BOOLEAN, stock INTEGER,
         min_qty REAL, max_qty REAL, sub_id INTEGER,
-        description TEXT, api_data TEXT)""")
+        description TEXT, api_data TEXT, server2_id BIGINT)""")
+
+    c.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS server2_id BIGINT")
 
     c.execute("""CREATE TABLE IF NOT EXISTS orders(
         id SERIAL PRIMARY KEY, order_uuid TEXT UNIQUE,
@@ -416,19 +419,19 @@ def subs(cat_id):
 def products(sub_id):
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT mhd_id, name FROM products WHERE sub_id=%s ORDER BY id", (sub_id,))
+    c.execute("SELECT id, name FROM products WHERE sub_id=%s ORDER BY id", (sub_id,))
     rows = c.fetchall()
     c.close()
     conn.close()
     return rows
 
 
-def product(mhd_id):
+def product_by_internal_id(internal_id):
     conn = db()
     c = conn.cursor()
     c.execute("""SELECT name, price, available, stock, min_qty, max_qty,
-                          product_type, description, api_data
-                          FROM products WHERE mhd_id=%s ORDER BY id DESC LIMIT 1""", (mhd_id,))
+                          product_type, description, api_data, mhd_id, server2_id, id
+                          FROM products WHERE id=%s LIMIT 1""", (internal_id,))
     row = c.fetchone()
     c.close()
     conn.close()
@@ -626,6 +629,8 @@ class AdminStates(StatesGroup):
     add_prod_select_cat = State()
     add_prod_select_sub = State()
     add_prod_id = State()
+    link_srv2_pick_prod = State()
+    link_srv2_enter_id = State()
     wait_deposit_amount = State()
     wait_add_user = State()
     wait_add_amount = State()
@@ -687,9 +692,9 @@ def admin_kb():
     kb = [
         [types.KeyboardButton(text="➕ إضافة قسم رئيسي", style="success"), types.KeyboardButton(text="✏️ تعديل اسم قسم", style="primary"), types.KeyboardButton(text="🗑️ إزالة قسم رئيسي", style="danger")],
         [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
-        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="🔄 تفعيل / تعطيل منتج", style="primary")],
-        [types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
-        [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
+        [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="🔗 ربط آيدي سيرفر 2 بمنتج", style="primary")],
+        [types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary"), types.KeyboardButton(text="🔄 تفعيل / تعطيل منتج", style="primary")],
+        [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
         [types.KeyboardButton(text=f"📈 أرباح سيرفر 1 ({margin1:g}%)", style="primary"), types.KeyboardButton(text=f"📈 أرباح سيرفر 2 ({margin2:g}%)", style="primary")],
         [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary")],
         [types.KeyboardButton(text="🚫 حظر مستخدم", style="danger"), types.KeyboardButton(text="🟢 فك حظر مستخدم", style="success")],
@@ -701,7 +706,9 @@ def admin_kb():
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-async def fetch_product(pid, server_id="server_1"):
+async def fetch_product(remote_pid, server_id="server_1"):
+    if not remote_pid:
+        return None
     server_info = SERVERS_CONFIG.get(server_id, SERVERS_CONFIG["server_1"])
     prod_url = f"{server_info['base_url']}/client/api/products"
     try:
@@ -732,9 +739,8 @@ async def fetch_product(pid, server_id="server_1"):
         for p in arr:
             if isinstance(p, dict):
                 x = p.get("id") or p.get("product_id") or p.get("productId")
-                if str(x) == str(pid):
-                    p_copy = dict(p)
-                    return p_copy
+                if str(x) == str(remote_pid):
+                    return dict(p)
     except Exception:
         pass
     return None
@@ -899,7 +905,7 @@ async def search_product_execute(message: types.Message, state: FSMContext):
 
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT mhd_id, name, price FROM products WHERE name ILIKE %s LIMIT 10", (f"%{query}%",))
+    c.execute("SELECT id, name, price FROM products WHERE name ILIKE %s LIMIT 10", (f"%{query}%",))
     rows = c.fetchall()
     c.close()
     conn.close()
@@ -910,7 +916,7 @@ async def search_product_execute(message: types.Message, state: FSMContext):
     btn_list = []
     for pid, name, base_price in rows:
         p_final = apply_margin_server(base_price, "server_1")
-        btn_list.append(types.InlineKeyboardButton(text=f"📦 {name} (${p_final:.4f})", callback_data=f"show_{pid}", style="primary"))
+        btn_list.append(types.InlineKeyboardButton(text=f"📦 {name}", callback_data=f"show_{pid}", style="primary"))
     
     keyboard = chunk_buttons(btn_list, 2)
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -933,7 +939,7 @@ async def show_wishlist(message: types.Message):
 
     keyboard = []
     for (pid,) in rows:
-        p_row = product(pid)
+        p_row = product_by_internal_id(pid)
         if p_row:
             name = p_row[0]
             keyboard.append([
@@ -962,7 +968,7 @@ async def add_wishlist_cb(cb: types.CallbackQuery):
     conn = db()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO wishlist(user_id, product_id) VALUES(%s, %s) ON CONFLICT DO NOTHING", (cb.from_user.id, pid))
+        c.execute("INSERT INTO wishlist(user_id, product_id) VALUES(%s, %s) ON CONFLICT DO NOTHING", (cb.from_user.id, int(pid)))
         conn.commit()
         await cb.answer("⭐ تم إضافة المنتج إلى المفضلة!", show_alert=True)
     except Exception:
@@ -978,7 +984,7 @@ async def del_wishlist_cb(cb: types.CallbackQuery):
     pid = cb.data.split("_")[1]
     conn = db()
     c = conn.cursor()
-    c.execute("DELETE FROM wishlist WHERE user_id=%s AND product_id=%s", (cb.from_user.id, pid))
+    c.execute("DELETE FROM wishlist WHERE user_id=%s AND product_id=%s", (cb.from_user.id, int(pid)))
     conn.commit()
     c.close()
     conn.close()
@@ -1293,7 +1299,7 @@ def build_admin_orders_view(page=1, search_query=None):
     if search_query:
         inline_keyboard.append([types.InlineKeyboardButton(text="🔄 إلغاء التصفية (عرض الكل)", callback_data="admin_orders_page_1", style="danger")])
 
-    kb = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     return text, kb
 
 
@@ -1485,20 +1491,18 @@ async def show_products(cb: types.CallbackQuery):
 async def show_product(cb: types.CallbackQuery):
     await safe_answer(cb)
     parts = cb.data.split("_")
-    pid = parts[1]
+    internal_pid = int(parts[1])
     sid = parts[2] if len(parts) > 2 else None
 
-    row = product(pid)
-    api1 = await fetch_product(pid, "server_1")
-    if not row and not api1:
+    row = product_by_internal_id(internal_pid)
+    if not row:
         return await cb.answer("المنتج غير موجود.", show_alert=True)
 
-    name = row[0] if row else (api1.get("name") if api1 else "غير محدد")
-    desc = row[7] if row else ""
-    pdata = db_product_data(row) if row else api1
+    name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data, mhd_id, srv2_id, _ = row
+    pdata = db_product_data(row)
     params = required_params(pdata)
     req = " و ".join(params) if params else "⚡ تسليم فوري (لا يتطلب مدخلات)"
-    local_available = bool(row[2]) if row else True
+    local_available = bool(db_avail)
 
     text = (
         f"📦 <b>المنتج:</b> {esc(name)}\n"
@@ -1507,22 +1511,22 @@ async def show_product(cb: types.CallbackQuery):
     if desc:
         text += f"ℹ️ <b>الوصف:</b> {esc(desc)}\n"
     text += f"📝 <b>المطلوب:</b> {esc(req)}\n\n"
-    text += "اضغط على <b>«🛒 شراء الآن»</b> لعرض الأسعار واختيار السيرفر المناسب."
+    text += "اضغط على <b>«🛒 شراء الآن»</b> لاختيار السيرفر وعرض سعره."
 
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT 1 FROM wishlist WHERE user_id=%s AND product_id=%s", (cb.from_user.id, pid))
+    c.execute("SELECT 1 FROM wishlist WHERE user_id=%s AND product_id=%s", (cb.from_user.id, internal_pid))
     in_wish = c.fetchone()
     c.close()
     conn.close()
 
     keyboard = []
     if local_available:
-        keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"selectsrv_{pid}", style="success")])
+        keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"selectsrv_{internal_pid}", style="success")])
     if in_wish:
-        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}", style="danger")])
+        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{internal_pid}", style="danger")])
     else:
-        keyboard.append([types.InlineKeyboardButton(text="⭐ إضافة للمفضلة", callback_data=f"addwish_{pid}", style="success")])
+        keyboard.append([types.InlineKeyboardButton(text="⭐ إضافة للمفضلة", callback_data=f"addwish_{internal_pid}", style="success")])
     if sid:
         keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع للمنتجات", callback_data=f"gamesub_{sid}", style="danger")])
     
@@ -1534,49 +1538,63 @@ async def show_product(cb: types.CallbackQuery):
             raise e
 
 
-# ================= اختيار السيرفر مع السعر =================
+# ================= اختيار السيرفر مع السعر المناسب =================
 @dp.callback_query(F.data.startswith("selectsrv_"))
 async def select_server_for_product(cb: types.CallbackQuery, state: FSMContext):
     if not store_open() and not is_admin(cb.from_user.id):
         return await cb.answer("⚠️ المتجر مغلق حالياً.", show_alert=True)
 
     await safe_answer(cb)
-    pid = cb.data.split("_")[1]
-    row = product(pid)
+    internal_pid = int(cb.data.split("_")[1])
+    row = product_by_internal_id(internal_pid)
+    if not row:
+        return await cb.answer("المنتج غير موجود.", show_alert=True)
 
-    # جلب أسعار السيرفرين في نفس الوقت
-    api1, api2 = await asyncio.gather(
-        fetch_product(pid, "server_1"),
-        fetch_product(pid, "server_2")
-    )
+    name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data, mhd_id, srv2_id, _ = row
 
-    p1 = float(api1.get("price", 0)) if api1 and api1.get("price") else (float(row[1]) if row else 0.0)
-    avail1 = bool(api1.get("available", True)) if api1 else False
-    final_p1 = apply_margin_server(p1, "server_1")
+    tasks = []
+    if mhd_id:
+        tasks.append(fetch_product(mhd_id, "server_1"))
+    else:
+        tasks.append(asyncio.sleep(0, result=None))
 
-    p2 = float(api2.get("price", 0)) if api2 and api2.get("price") else 0.0
-    avail2 = bool(api2.get("available", True)) if api2 else False
-    final_p2 = apply_margin_server(p2, "server_2")
+    if srv2_id:
+        tasks.append(fetch_product(srv2_id, "server_2"))
+    else:
+        tasks.append(asyncio.sleep(0, result=None))
 
-    prod_name = row[0] if row else (api1.get("name") if api1 else "المنتج")
+    api1, api2 = await asyncio.gather(*tasks)
 
     keyboard = []
-    if avail1 and final_p1 > 0:
-        keyboard.append([types.InlineKeyboardButton(text=f"🌐 سيرفر 1 (سريع) — ${final_p1:.4f}", callback_data=f"choose_{pid}_server_1", style="primary")])
-    else:
-        keyboard.append([types.InlineKeyboardButton(text="🌐 سيرفر 1 — ❌ غير متوفر", callback_data="none_1", style="danger")])
 
-    if avail2 and final_p2 > 0:
-        keyboard.append([types.InlineKeyboardButton(text=f"🌐 سيرفر 2 (وسيم) — ${final_p2:.4f}", callback_data=f"choose_{pid}_server_2", style="primary")])
-    else:
-        keyboard.append([types.InlineKeyboardButton(text="🌐 سيرفر 2 — ❌ غير متوفر", callback_data="none_2", style="danger")])
+    # حساب سيرفر 1
+    if mhd_id:
+        p1 = float(api1.get("price", 0)) if api1 and api1.get("price") else float(base_p or 0)
+        avail1 = bool(api1.get("available", True)) if api1 else True
+        final_p1 = apply_margin_server(p1, "server_1")
+        if avail1 and final_p1 > 0:
+            keyboard.append([types.InlineKeyboardButton(text=f"🌐 سيرفر 1 (سريع) — ${final_p1:.4f}", callback_data=f"choose_{internal_pid}_server_1", style="primary")])
+        else:
+            keyboard.append([types.InlineKeyboardButton(text="🌐 سيرفر 1 — ❌ غير متوفر", callback_data="none_1", style="danger")])
 
-    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data=f"show_{pid}", style="danger")])
+    # حساب سيرفر 2
+    if srv2_id:
+        p2 = float(api2.get("price", 0)) if api2 and api2.get("price") else 0.0
+        avail2 = bool(api2.get("available", True)) if api2 else False
+        final_p2 = apply_margin_server(p2, "server_2")
+        if avail2 and final_p2 > 0:
+            keyboard.append([types.InlineKeyboardButton(text=f"🌐 سيرفر 2 (وسيم) — ${final_p2:.4f}", callback_data=f"choose_{internal_pid}_server_2", style="primary")])
+        else:
+            keyboard.append([types.InlineKeyboardButton(text="🌐 سيرفر 2 — ❌ غير متوفر", callback_data="none_2", style="danger")])
+    elif not mhd_id:
+        keyboard.append([types.InlineKeyboardButton(text="❌ المنتج غير مربوط بأي سيرفر", callback_data="none_all", style="danger")])
+
+    keyboard.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data=f"show_{internal_pid}", style="danger")])
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     try:
         await cb.message.edit_text(
-            f"🛒 <b>شراء: {esc(prod_name)}</b>\n\n"
+            f"🛒 <b>شراء: {esc(name)}</b>\n\n"
             "يرجى اختيار السيرفر الذي ترغب بالشراء منه:",
             reply_markup=kb,
             parse_mode="HTML"
@@ -1595,36 +1613,41 @@ async def server_unavailable(cb: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("choose_"))
 async def start_buy_flow(cb: types.CallbackQuery, state: FSMContext):
     parts = cb.data.split("_")
-    pid = parts[1]
+    internal_pid = int(parts[1])
     server_id = f"{parts[2]}_{parts[3]}"
 
-    row = product(pid)
-    api = await fetch_product(pid, server_id)
-    if not api and not row:
+    row = product_by_internal_id(internal_pid)
+    if not row:
         return await cb.answer("خطأ في بيانات المنتج.", show_alert=True)
 
-    base_p = float(api.get("price", 0)) if api and api.get("price") else (float(row[1]) if row else 0.0)
-    price = apply_margin_server(base_p, server_id)
+    name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data, mhd_id, srv2_id, _ = row
+    target_remote_id = mhd_id if server_id == "server_1" else srv2_id
 
-    name = row[0] if row else (api.get("name") if api else "غير محدد")
-    desc = row[7] if row else ""
+    if not target_remote_id:
+        return await cb.answer("المنتج غير مربوط بهذا السيرفر.", show_alert=True)
+
+    api = await fetch_product(target_remote_id, server_id)
+    base_p_calc = float(api.get("price", 0)) if api and api.get("price") else float(base_p or 0)
+    price = apply_margin_server(base_p_calc, server_id)
+
     pdata = api if api else db_product_data(row)
-    ptype = pdata.get("product_type", row[6] if row else "digital")
+    product_type = pdata.get("product_type", ptype or "digital")
 
     current_balance = user_init(cb.from_user.id)
-    if str(ptype).lower() != "amount" and current_balance < price:
+    if str(product_type).lower() != "amount" and current_balance < price:
         return await cb.answer(f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${price:.4f}", show_alert=True)
 
     await safe_answer(cb)
     qtys_from_desc = extract_quantities_from_text(desc)
 
     await state.update_data({
-        "pid": str(pid), "name": name, "unit_price": price,
-        "ptype": ptype, "params": required_params(pdata), "idx": 0,
+        "internal_pid": internal_pid, "remote_pid": target_remote_id,
+        "name": name, "unit_price": price,
+        "ptype": product_type, "params": required_params(pdata), "idx": 0,
         "answers": {}, "qtys_list": qtys_from_desc, "server_id": server_id
     })
 
-    if str(ptype).lower() == "amount":
+    if str(product_type).lower() == "amount":
         if qtys_from_desc:
             btn_list = [types.InlineKeyboardButton(text=f"{q:g}", callback_data=f"setqty_{q}", style="primary") for q in qtys_from_desc]
             keyboard = chunk_buttons(btn_list, 3)
@@ -1798,7 +1821,8 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
 
     uid = cb.from_user.id
     total = float(d["total"])
-    pid = str(d["pid"])
+    remote_pid = str(d["remote_pid"])
+    internal_pid = int(d.get("internal_pid", 0))
     qty_value = float(d.get("qty", 1))
     name = d["name"]
     answers = list(d.get("answers", {}).values())
@@ -1838,7 +1862,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
     if any_key:
         params["anyKey"] = any_key
 
-    url = f"{srv_conf['base_url']}/client/api/newOrder/{urllib.parse.quote(pid, safe='')}/params?{urllib.parse.urlencode(params)}"
+    url = f"{srv_conf['base_url']}/client/api/newOrder/{urllib.parse.quote(remote_pid, safe='')}/params?{urllib.parse.urlencode(params)}"
 
     try:
         async with session(20) as s:
@@ -1871,7 +1895,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
                            (order_uuid, user_id, product_id, product_name, price, status, replay_api, qty, player_id, server_id)
                            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                            ON CONFLICT (order_uuid) DO NOTHING""",
-                        (ouuid, uid, int(pid) if pid.isdigit() else 0, name, total, api_status, rep, qty_value, player, selected_server))
+                        (ouuid, uid, internal_pid, name, total, api_status, rep, qty_value, player, selected_server))
             c.execute("SELECT id FROM orders WHERE order_uuid=%s", (ouuid,))
             row = c.fetchone()
             oid = row[0] if row else 0
@@ -1883,7 +1907,7 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
                 accept_once(oid, rep)
                 text = f"🎉 <b>تم اكتمال طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n🌐 المزود: {esc(srv_conf['name'])}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
-                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(rep)}</code>\n"
+                    text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(clean_rep)}</code>\n"
             else:
                 text = f"✅ <b>تم استلام طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n🌐 المزود: {esc(srv_conf['name'])}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
                 if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
@@ -1909,6 +1933,107 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
 
     await state.clear()
     await safe_send(uid, "🏠 يمكنك متابعة التسوق.", reply_markup=main_kb(uid))
+
+
+# ================= ربط آيدي سيرفر 2 بمنتج موجود =================
+@dp.message(F.text == "🔗 ربط آيدي سيرفر 2 بمنتج")
+async def link_srv2_start(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    rows = categories()
+    if not rows:
+        return await safe_send(message.from_user.id, "❌ لا توجد أقسام.")
+    btn_list = [types.InlineKeyboardButton(text=f"📂 {clean_name(name)}", callback_data=f"lnksrv2_cat_{cid}", style="primary") for cid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    await safe_send(message.from_user.id, "اختر القسم الخاص بالمنتج:", reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("lnksrv2_cat_"))
+async def link_srv2_cat_chosen(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    cid = cb.data.split("_")[2]
+    rows = subs(cid)
+    if not rows:
+        return await cb.answer("لا توجد ألعاب.", show_alert=True)
+    btn_list = [types.InlineKeyboardButton(text=f"🎮 {clean_name(name)}", callback_data=f"lnksrv2_sub_{sid}", style="primary") for sid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        await cb.message.edit_text("اختر اللعبة:", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("lnksrv2_sub_"))
+async def link_srv2_sub_chosen(cb: types.CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    sid = cb.data.split("_")[2]
+    rows = products(sid)
+    if not rows:
+        return await cb.answer("لا توجد منتجات.", show_alert=True)
+    btn_list = [types.InlineKeyboardButton(text=f"📦 {name}", callback_data=f"lnksrv2_pick_{pid}", style="primary") for pid, name in rows]
+    keyboard = chunk_buttons(btn_list, 2)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        await cb.message.edit_text("اختر المنتج لربطه بآيدي سيرفر 2 (وسيم):", reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+
+@dp.callback_query(F.data.startswith("lnksrv2_pick_"))
+async def link_srv2_pick(cb: types.CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await safe_answer(cb, "غير مصرح.", True)
+    await safe_answer(cb)
+    internal_pid = int(cb.data.split("_")[2])
+    row = product_by_internal_id(internal_pid)
+    
+    current_srv2 = row[10] if row and row[10] else "غير مربوط"
+    await state.update_data({"link_prod_id": internal_pid})
+    cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+    
+    await safe_send(
+        cb.from_user.id,
+        f"🔗 <b>ربط آيدي سيرفر 2 للمنتج:</b>\n\n"
+        f"📦 المنتج: <b>{esc(row[0])}</b>\n"
+        f"🆔 آيدي سيرفر 1 (سريع): <code>{row[9]}</code>\n"
+        f"🆔 آيدي سيرفر 2 الحالي: <code>{current_srv2}</code>\n\n"
+        "أرسل معرّف ID المنتج الخاص بهذا الصنف في موقع <b>وسيم ستور</b> الآن:",
+        reply_markup=cancel_kb
+    )
+    await state.set_state(AdminStates.link_srv2_enter_id)
+
+
+@dp.message(AdminStates.link_srv2_enter_id)
+async def link_srv2_save(message: types.Message, state: FSMContext):
+    if message.text in ("🔙 إلغاء الشراء", "🔙 رجوع للرئيسية"):
+        await state.clear()
+        return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=admin_kb())
+    
+    raw = message.text.strip()
+    if not raw.isdigit():
+        return await safe_send(message.from_user.id, "❌ يرجى إرسال رقم ID صحيح.")
+        
+    srv2_id_val = int(raw)
+    d = await state.get_data()
+    internal_pid = d.get("link_prod_id")
+    
+    conn = db()
+    c = conn.cursor()
+    c.execute("UPDATE products SET server2_id=%s WHERE id=%s", (srv2_id_val, internal_pid))
+    conn.commit()
+    c.close()
+    conn.close()
+    
+    await safe_send(message.from_user.id, f"✅ <b>تم ربط المنتج بنجاح!</b>\nالآيدي المعتمد لسيرفر 2 هو: <code>{srv2_id_val}</code>", reply_markup=admin_kb())
+    await state.clear()
 
 
 # ================= الشحن والدفع =================
@@ -2368,7 +2493,7 @@ async def toggle_product_cat_chosen(cb: types.CallbackQuery):
 def build_toggle_products_kb(sid):
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT mhd_id, name, available FROM products WHERE sub_id=%s ORDER BY id", (sid,))
+    c.execute("SELECT id, name, available FROM products WHERE sub_id=%s ORDER BY id", (sid,))
     rows = c.fetchall()
     c.close()
     conn.close()
@@ -2421,12 +2546,12 @@ async def toggle_product_action(cb: types.CallbackQuery):
         return await safe_answer(cb, "غير مصرح.", True)
     await safe_answer(cb)
     parts = cb.data.split("_")
-    pid = parts[1]
+    internal_pid = int(parts[1])
     sid = parts[2]
 
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT available, name FROM products WHERE mhd_id=%s", (int(pid),))
+    c.execute("SELECT available, name FROM products WHERE id=%s", (internal_pid,))
     row = c.fetchone()
     if not row:
         c.close()
@@ -2435,7 +2560,7 @@ async def toggle_product_action(cb: types.CallbackQuery):
     
     current_status = bool(row[0])
     new_status = not current_status
-    c.execute("UPDATE products SET available=%s WHERE mhd_id=%s", (new_status, int(pid)))
+    c.execute("UPDATE products SET available=%s WHERE id=%s", (new_status, internal_pid))
     conn.commit()
     c.close()
     conn.close()
@@ -2619,8 +2744,8 @@ async def edit_product_pick(cb: types.CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         return await safe_answer(cb, "غير مصرح.", True)
     await safe_answer(cb)
-    pid = cb.data.split("_")[2]
-    await state.update_data({"edit_pid": pid})
+    internal_pid = int(cb.data.split("_")[2])
+    await state.update_data({"edit_internal_pid": internal_pid})
     cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
     await safe_send(cb.from_user.id, "أرسل الاسم الجديد للمنتج الآن:", reply_markup=cancel_kb)
     await state.set_state(AdminStates.edit_prod_new_name)
@@ -2635,10 +2760,10 @@ async def edit_product_finish(message: types.Message, state: FSMContext):
     if not new_name:
         return await safe_send(message.from_user.id, "❌ الاسم لا يمكن أن يكون فارغاً.")
     d = await state.get_data()
-    pid = d.get("edit_pid")
+    internal_pid = d.get("edit_internal_pid")
     conn = db()
     c = conn.cursor()
-    c.execute("UPDATE products SET name=%s WHERE mhd_id=%s", (new_name, int(pid)))
+    c.execute("UPDATE products SET name=%s WHERE id=%s", (new_name, internal_pid))
     conn.commit()
     c.close()
     conn.close()
@@ -2703,17 +2828,17 @@ async def edit_prod_desc_pick_cb(cb: types.CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         return await safe_answer(cb, "غير مصرح.", True)
     await safe_answer(cb)
-    pid = cb.data.split("_")[2]
-    p_info = product(pid)
+    internal_pid = int(cb.data.split("_")[2])
+    p_info = product_by_internal_id(internal_pid)
     current_desc = p_info[7] if (p_info and p_info[7]) else "لا يوجد وصف حالياً"
     
-    await state.update_data({"edit_desc_pid": pid})
+    await state.update_data({"edit_desc_internal_pid": internal_pid})
     cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
     
     await safe_send(
         cb.from_user.id,
         f"📝 <b>تعديل وصف المنتج:</b>\n\n"
-        f"📦 المنتج: <b>{esc(p_info[0] if p_info else pid)}</b>\n\n"
+        f"📦 المنتج: <b>{esc(p_info[0] if p_info else internal_pid)}</b>\n\n"
         f"📄 <b>الوصف الحالي:</b>\n<code>{esc(current_desc)}</code>\n\n"
         "أرسل الوصف الجديد الآن (أو أرسل كلمة <code>حذف الوصف</code> لمسحه):",
         reply_markup=cancel_kb
@@ -2730,11 +2855,11 @@ async def edit_prod_desc_save(message: types.Message, state: FSMContext):
     val = message.text.strip()
     new_desc = "" if val == "حذف الوصف" else val
     d = await state.get_data()
-    pid = d.get("edit_desc_pid")
+    internal_pid = d.get("edit_desc_internal_pid")
     
     conn = db()
     c = conn.cursor()
-    c.execute("UPDATE products SET description=%s WHERE mhd_id=%s", (new_desc, int(pid)))
+    c.execute("UPDATE products SET description=%s WHERE id=%s", (new_desc, internal_pid))
     conn.commit()
     c.close()
     conn.close()
@@ -3197,7 +3322,7 @@ async def product_add_start(message: types.Message, state: FSMContext):
         return await safe_send(message.from_user.id, "❌ أضف قسماً أولاً.")
     btn_list = [types.KeyboardButton(text=f"📂 {clean_name(name)}", style="primary") for cid, name in rows]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")])
+    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")] readiness_list)
     kb = types.ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     await safe_send(message.from_user.id, "اختر القسم:", reply_markup=kb)
     await state.set_state(AdminStates.add_prod_select_cat)
@@ -3246,7 +3371,7 @@ async def product_add_sub(message: types.Message, state: FSMContext):
     )
     await safe_send(
         message.from_user.id,
-        "🔢 <b>أرسل معرّف ID المنتج من الموقع:</b>\n\n"
+        "🔢 <b>أرسل معرّف ID المنتج من الموقع الأساسي (MHD):</b>\n\n"
         "💡 <i>يمكنك إرسال ID واحد أو عدة آيديات معاً مفصولة بمسافة (مثلاً: <code>101 102 103</code>)، وسيتم إضافتها ويبقى البوت في وضع الاستقبال حتى تضغط زر الإنهاء.</i>",
         reply_markup=stop_kb
     )
@@ -3266,20 +3391,23 @@ async def product_fetch_multi(message: types.Message, state: FSMContext):
 
     d = await state.get_data()
     sub_id = d["sub_id"]
-
     status_report = []
 
     for pid in id_list:
-        if product(pid):
-            status_report.append(f"⚠️ المنتج <code>{pid}</code>: موجود مسبقاً.")
+        conn_chk = db()
+        c_chk = conn_chk.cursor()
+        c_chk.execute("SELECT 1 FROM products WHERE mhd_id=%s AND sub_id=%s", (int(pid), sub_id))
+        exists = c_chk.fetchone()
+        c_chk.close()
+        conn_chk.close()
+
+        if exists:
+            status_report.append(f"⚠️ المنتج <code>{pid}</code>: موجود مسبقاً بهذه اللعبة.")
             continue
 
         api = await fetch_product(pid, "server_1")
         if not api:
-            api = await fetch_product(pid, "server_2")
-            
-        if not api:
-            status_report.append(f"❌ المنتج <code>{pid}</code>: غير موجود بالموقعين.")
+            status_report.append(f"❌ المنتج <code>{pid}</code>: غير موجود بالموقع الأساسي.")
             continue
 
         base_price = float(api.get("price", 0) or 0)
@@ -3358,10 +3486,10 @@ async def product_delete(cb: types.CallbackQuery):
     if not is_admin(cb.from_user.id):
         return await safe_answer(cb, "غير مصرح.", True)
     await safe_answer(cb)
-    pid = cb.data.split("_")[1]
+    internal_pid = int(cb.data.split("_")[1])
     conn = db()
     c = conn.cursor()
-    c.execute("DELETE FROM products WHERE mhd_id=%s", (int(pid),))
+    c.execute("DELETE FROM products WHERE id=%s", (internal_pid,))
     conn.commit()
     c.close()
     conn.close()
@@ -3387,9 +3515,10 @@ async def main():
     except Exception as e:
         print(f"⚠️ خطأ تعيين القائمة: {e}")
 
-    print("🚀 Bot Started Successfully with Multi-Server Support & Distinct Server Margins!")
+    print("🚀 Bot Started Successfully with Distinct Remote IDs!")
     asyncio.create_task(auto_send_deposits_pdf_task())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
