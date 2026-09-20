@@ -142,7 +142,6 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS subcategories(
         id SERIAL PRIMARY KEY, name TEXT, cat_id INTEGER)""")
 
-    # إنشاء أو تعديل جدول المنتجات ليدعم الآيديات المنفصلة
     c.execute("""CREATE TABLE IF NOT EXISTS products(
         id SERIAL PRIMARY KEY, mhd_id BIGINT, name TEXT,
         price REAL, product_type TEXT, available BOOLEAN, stock INTEGER,
@@ -1299,7 +1298,7 @@ def build_admin_orders_view(page=1, search_query=None):
     if search_query:
         inline_keyboard.append([types.InlineKeyboardButton(text="🔄 إلغاء التصفية (عرض الكل)", callback_data="admin_orders_page_1", style="danger")])
 
-    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
     return text, kb
 
 
@@ -3322,7 +3321,7 @@ async def product_add_start(message: types.Message, state: FSMContext):
         return await safe_send(message.from_user.id, "❌ أضف قسماً أولاً.")
     btn_list = [types.KeyboardButton(text=f"📂 {clean_name(name)}", style="primary") for cid, name in rows]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")] readiness_list)
+    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")])
     kb = types.ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     await safe_send(message.from_user.id, "اختر القسم:", reply_markup=kb)
     await state.set_state(AdminStates.add_prod_select_cat)
@@ -3521,4 +3520,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
