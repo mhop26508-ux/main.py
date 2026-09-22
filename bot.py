@@ -125,7 +125,6 @@ def init_db():
         balance REAL DEFAULT 0, is_admin BOOLEAN DEFAULT FALSE,
         is_banned BOOLEAN DEFAULT FALSE)""")
 
-    # للتأكد من وجود عمود is_banned في حال كان الجدول منشأ سابقاً
     c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE")
 
     c.execute("""CREATE TABLE IF NOT EXISTS categories(
@@ -437,6 +436,21 @@ def extract_quantities_from_text(text):
     return sorted(unique_nums)
 
 
+def is_amount_product(data, row=None):
+    if not isinstance(data, dict):
+        data = {}
+    ptype = str(data.get("product_type") or data.get("type") or (row[6] if row else "")).lower()
+    if ptype in ("amount", "quantity", "qty", "custom_qty"):
+        return True
+    pname = str(data.get("name") or (row[0] if row else "")).lower()
+    pdesc = str(data.get("description") or (row[7] if row else "")).lower()
+    if any(k in pname or k in pdesc for k in ["نجوم تلغرام", "telegram stars", "stars", "شحن رصيد", "مبلغ مخصص", "الكمية المطلوبة"]):
+        return True
+    if data.get("has_amount") or data.get("allow_qty") or data.get("is_amount"):
+        return True
+    return False
+
+
 def norm_status(status):
     s = str(status or "").strip().lower()
     s = s.replace("_", " ").replace("-", " ")
@@ -670,20 +684,14 @@ def admin_kb():
     margin = get_margin_percent()
     rate = get_exchange_rate()
     kb = [
-        # إدارة الأقسام
         [types.KeyboardButton(text="➕ إضافة قسم رئيسي", style="success"), types.KeyboardButton(text="✏️ تعديل اسم قسم", style="primary"), types.KeyboardButton(text="🗑️ إزالة قسم رئيسي", style="danger")],
-        # إدارة الألعاب
         [types.KeyboardButton(text="➕ إضافة لعبة لقسم", style="success"), types.KeyboardButton(text="✏️ تعديل اسم لعبة", style="primary"), types.KeyboardButton(text="🗑️ إزالة لعبة من قسم", style="danger")],
-        # إدارة المنتجات
         [types.KeyboardButton(text="➕ إضافة منتجات للعبة", style="success"), types.KeyboardButton(text="🔄 تفعيل / تعطيل منتج", style="primary")],
         [types.KeyboardButton(text="✏️ تعديل اسم منتج", style="primary"), types.KeyboardButton(text="📝 تعديل وصف منتج", style="primary"), types.KeyboardButton(text="🗑️ حذف منتج من لعبة", style="danger")],
-        # المالية والأرصدة
         [types.KeyboardButton(text="➕ إضافة رصيد لعميل", style="success"), types.KeyboardButton(text="🔻 سحب/خصم رصيد عميل", style="danger")],
-        [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:,.0f} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
-        # إدارة الأعضاء والحظر
+        [types.KeyboardButton(text=f"💱 سعر الصرف ({rate:g} ل.س)", style="primary"), types.KeyboardButton(text=f"📈 تعديل أسعار ({margin:g}%)", style="primary")],
         [types.KeyboardButton(text="🚫 حظر مستخدم", style="danger"), types.KeyboardButton(text="🟢 فك حظر مستخدم", style="success")],
         [types.KeyboardButton(text="👤 إضافة أدمن جديد", style="primary"), types.KeyboardButton(text="🚫 إزالة أدمن", style="danger")],
-        # النظام والإحصائيات
         [types.KeyboardButton(text=f"🏪 حالة المتجر: {state_txt}", style="success" if store_open() else "danger"), types.KeyboardButton(text="📋 الطلبات الكلية", style="primary"), types.KeyboardButton(text="📊 إحصائيات المتجر", style="primary")],
         [types.KeyboardButton(text="💳 إدارة طرق الدفع", style="primary"), types.KeyboardButton(text="📞 تعديل حساب الدعم", style="primary")],
         [types.KeyboardButton(text="📢 إرسال رسالة للكل", style="primary"), types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")]
@@ -1337,8 +1345,8 @@ async def edit_exchange_rate_start(message: types.Message, state: FSMContext):
     await safe_send(
         message.from_user.id,
         f"💱 <b>تعديل سعر صرف الدولار مقابل الليرة السورية:</b>\n\n"
-        f"السعر الحالي: <b>1$ = {current_rate:,.0f} ل.س</b>\n\n"
-        "أرسل سعر الصرف الجديد (كم ليرة سورية تساوي 1 دولار؟ مثلاً اكتب: <code>15200</code>):"
+        f"السعر الحالي: <b>1$ = {current_rate:g} ل.س</b>\n\n"
+        "أرسل سعر الصرف الجديد (يقبل الفواصل العشرية، مثلاً: <code>138.2</code> أو <code>15200</code>):"
     )
     await state.set_state(AdminStates.edit_exchange_rate)
 
@@ -1353,7 +1361,7 @@ async def edit_exchange_rate_finish(message: types.Message, state: FSMContext):
         if val <= 0:
             raise ValueError
     except ValueError:
-        return await safe_send(message.from_user.id, "❌ يرجى كتابة رقم صحيح لسعر الصرف.")
+        return await safe_send(message.from_user.id, "❌ يرجى كتابة رقم صحيح أو عشري لسعر الصرف.")
     
     conn = db()
     c = conn.cursor()
@@ -1362,7 +1370,7 @@ async def edit_exchange_rate_finish(message: types.Message, state: FSMContext):
     c.close()
     conn.close()
 
-    await safe_send(message.from_user.id, f"✅ <b>تم تحديث سعر الصرف بنجاح!</b>\nالآن 1$ = <b>{val:,.0f} ل.س</b>", reply_markup=admin_kb())
+    await safe_send(message.from_user.id, f"✅ <b>تم تحديث سعر الصرف بنجاح!</b>\nالآن 1$ = <b>{val:g} ل.س</b>", reply_markup=admin_kb())
     await state.clear()
 
 
@@ -1485,8 +1493,8 @@ async def show_product(cb: types.CallbackQuery):
         name = row[0] if row else (api.get("name") or "غير محدد")
         price = float(api.get("price", 0) or 0)
         available = bool(api.get("available", True)) and local_available
-        ptype = api.get("product_type", "digital")
         pdata = api
+        ptype = api.get("product_type", "digital")
         desc = row[7] if row else ""
     else:
         name, base_p, db_avail, stock, mn, mx, ptype, desc, api_data = row
@@ -1496,7 +1504,8 @@ async def show_product(cb: types.CallbackQuery):
 
     params = required_params(pdata)
     req = " و ".join(params) if params else "⚡ تسليم فوري (لا يتطلب مدخلات)"
-    ptxt = f"${price:.4f}" if str(ptype).lower() != "amount" else f"${price:.4f} للوحدة"
+    is_amt = is_amount_product(pdata, row)
+    ptxt = f"${price:.4f} للوحدة" if is_amt else f"${price:.4f}"
 
     text = (
         f"📦 <b>المنتج:</b> {esc(name)}\n"
@@ -1547,7 +1556,7 @@ async def next_buy_step(user_id: int, state: FSMContext):
 
     answers = d.get("answers", {})
     details = ("\n".join(f"🔸 {esc(k)}: <code>{esc(v)}</code>" for k, v in answers.items()) if answers else "⚡ لا توجد بيانات مطلوبة")
-    qty_txt = (f"🔢 الكمية/المبلغ: {float(d['qty']):g}\n" if str(d["ptype"]).lower() == "amount" else "")
+    qty_txt = (f"🔢 الكمية/المبلغ: {float(d['qty']):g}\n" if d.get("is_amount") else "")
     text = (
         "🧾 <b>مراجعة الطلب:</b>\n\n"
         f"📦 المنتج: {esc(d['name'])}\n"
@@ -1581,7 +1590,7 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
     if api:
         name = row[0] if row else api.get("name", "غير محدد")
         price = float(api.get("price", 0) or 0)
-        desc = ""
+        desc = row[7] if row else (api.get("description") or "")
         pdata = api
         available = bool(api.get("available", True)) and local_available
     else:
@@ -1595,8 +1604,9 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
     if not available:
         return await cb.answer("❌ المنتج غير متوفر حالياً.", show_alert=True)
 
+    is_amt = is_amount_product(pdata, row)
     current_balance = user_init(cb.from_user.id)
-    if str(ptype).lower() != "amount" and current_balance < price:
+    if not is_amt and current_balance < price:
         return await cb.answer(f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${price:.4f}", show_alert=True)
 
     await safe_answer(cb)
@@ -1605,11 +1615,11 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
 
     await state.update_data({
         "pid": str(pid), "name": name, "unit_price": price,
-        "ptype": ptype, "params": required_params(pdata), "idx": 0,
+        "ptype": ptype, "is_amount": is_amt, "params": required_params(pdata), "idx": 0,
         "answers": {}, "qtys_list": qtys_from_desc
     })
 
-    if str(ptype).lower() == "amount":
+    if is_amt:
         if qtys_from_desc:
             btn_list = [types.InlineKeyboardButton(text=f"{q:g}", callback_data=f"setqty_{q}", style="primary") for q in qtys_from_desc]
             keyboard = chunk_buttons(btn_list, 3)
@@ -1826,15 +1836,16 @@ async def create_order(cb: types.CallbackQuery, state: FSMContext):
             c.close()
             conn.close()
 
+            clean_rep = str(rep or "").strip()
             if accepted(api_status):
                 accept_once(oid, rep)
                 text = f"🎉 <b>تم اكتمال طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
-                if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
+                if clean_rep and clean_rep not in ("[]", "{}", "null", "None"):
                     text += f"\n🎁 <b>بيانات الحساب / التسليم:</b>\n<code>{esc(clean_rep)}</code>\n"
             else:
                 text = f"✅ <b>تم استلام طلبك بنجاح! (#{oid})</b>\n\n📦 المنتج: {esc(name)}\n📌 order_uuid: <code>{esc(ouuid)}</code>\n"
-                if rep and str(rep).strip() not in ("[]", "{}", "null", "None"):
-                    text += f"📝 البيانات:\n<code>{esc(rep)}</code>\n"
+                if clean_rep and clean_rep not in ("[]", "{}", "null", "None"):
+                    text += f"📝 البيانات:\n<code>{esc(clean_rep)}</code>\n"
                 text += "\n⏳ يجري تتبع الطلب وتحديث حالته تلقائياً..."
 
             try:
@@ -1876,7 +1887,7 @@ async def deposit_menu(message: types.Message, state: FSMContext):
     keyboard = []
     for code, name in rows:
         if code == "sham_usd":
-            style = "primary"  # باللون الأزرق
+            style = "primary"
         elif code == "syriatel":
             style = "danger"
         elif code in ("bep20", "binance"):
@@ -1888,7 +1899,7 @@ async def deposit_menu(message: types.Message, state: FSMContext):
     kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
     await safe_send(
         message.from_user.id,
-        f"💳 <b>اختر وسيلة الدفع لشحن الرصيد:</b>\n\n📌 <i>سعر الصرف المعتمد لطرق الدفع بالليرة: 1$ = {rate:,.0f} ل.س</i>",
+        f"💳 <b>اختر وسيلة الدفع لشحن الرصيد:</b>\n\n📌 <i>سعر الصرف المعتمد لطرق الدفع بالليرة: 1$ = {rate:g} ل.س</i>",
         reply_markup=kb
     )
 
@@ -1920,7 +1931,7 @@ async def pay_info(cb: types.CallbackQuery, state: FSMContext):
     if code in USD_PAYMENT_METHODS:
         currency_notice = "📌 <i>طريقة الدفع هذه بالدولار ($) مباشرة بدون تصريف.</i>"
     else:
-        currency_notice = f"📌 <i>ملاحظة: الشحن بالليرة السورية (سعر الصرف: 1$ = {rate:,.0f} ل.س) وسيتم إضافة الرصيد لحسابك بالدولار ($).</i>"
+        currency_notice = f"📌 <i>ملاحظة: الشحن بالليرة السورية (سعر الصرف: 1$ = {rate:g} ل.س) وسيتم إضافة الرصيد لحسابك بالدولار ($).</i>"
 
     try:
         await cb.message.edit_text(
@@ -1974,7 +1985,7 @@ async def trans_id(message: types.Message, state: FSMContext):
         rate = get_exchange_rate()
         prompt_text = (
             f"الآن، أرسل المبلغ الذي قمت بتحويله <b>بالليرة السورية (ل.س)</b>:\n"
-            f"(سعر الصرف المعتمد: 1$ = {rate:,.0f} ل.س)"
+            f"(سعر الصرف المعتمد: 1$ = {rate:g} ل.س)"
         )
 
     await safe_send(message.from_user.id, prompt_text)
@@ -2015,7 +2026,7 @@ async def dep_amount(message: types.Message, state: FSMContext):
     else:
         rate = get_exchange_rate()
         amount_usd = entered_amount / rate
-        amount_txt = f"{entered_amount:,.0f} ل.س (ما يعادل: <b>${amount_usd:.4f}</b> بسعر صرف {rate:,.0f})"
+        amount_txt = f"{entered_amount:g} ل.س (ما يعادل: <b>${amount_usd:.4f}</b> بسعر صرف {rate:g})"
 
     suggested_usd = f"{amount_usd:.4f}"
 
@@ -2037,7 +2048,6 @@ async def dep_amount(message: types.Message, state: FSMContext):
         f"💵 المبلغ المحول: {amount_txt}"
     )
 
-    # إرسال طلب الشحن لجميع الأدمنية والمالك
     admins_list = get_all_admins()
     for admin_id in admins_list:
         await safe_send(admin_id, deposit_notification_text, kb)
@@ -2216,7 +2226,7 @@ async def edit_all_prices_start(message: types.Message, state: FSMContext):
     current_margin = get_margin_percent()
     await safe_send(
         message.from_user.id,
-        f"📊 <b>تعديل أسعار المتجر بالكامل (%)</b>\n\nالنسبة الحالية: <b>{current_margin:g}%</b>\n\nأدخل النسبة الجديدة (مثال: أرسل 10 لزيادة 10% لكل 1$):"
+        f"📊 <b>تعديل أسعار المتجر بالكامل (%)</b>\n\nالنسبة الحالية: <b>{current_margin:g}%</b>\n\nأدخل النسبة الجديدة (يقبل الفواصل العشرية، مثلاً: <code>7.5</code> أو <code>10</code>):"
     )
     await state.set_state(AdminStates.edit_price_percentage)
 
@@ -2231,7 +2241,7 @@ async def edit_all_prices_finish(message: types.Message, state: FSMContext):
         if val < 0:
             raise ValueError
     except ValueError:
-        return await safe_send(message.from_user.id, "❌ يرجى كتابة رقم نسبة صحيح.")
+        return await safe_send(message.from_user.id, "❌ يرجى كتابة رقم نسبة صحيح أو عشري.")
 
     conn = db()
     c = conn.cursor()
@@ -3299,7 +3309,6 @@ async def main():
     init_db()
     await start_web_server()
     
-    # حذف أي Webhook قديم معلق لتفادي TelegramConflictError
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
@@ -3316,4 +3325,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
