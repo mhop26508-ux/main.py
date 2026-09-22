@@ -422,20 +422,6 @@ def product(mhd_id):
     return row
 
 
-def extract_quantities_from_text(text):
-    if not text:
-        return []
-    numbers = re.findall(r'\d+(?:\.\d+)?', text)
-    unique_nums = []
-    seen = set()
-    for n in numbers:
-        val = float(n)
-        if val not in seen and val > 0:
-            seen.add(val)
-            unique_nums.append(val)
-    return sorted(unique_nums)
-
-
 def is_amount_product(data, row=None):
     if not isinstance(data, dict):
         data = {}
@@ -1611,50 +1597,23 @@ async def start_buy(cb: types.CallbackQuery, state: FSMContext):
 
     await safe_answer(cb)
 
-    qtys_from_desc = extract_quantities_from_text(desc)
-
     await state.update_data({
         "pid": str(pid), "name": name, "unit_price": price,
         "ptype": ptype, "is_amount": is_amt, "params": required_params(pdata), "idx": 0,
-        "answers": {}, "qtys_list": qtys_from_desc
+        "answers": {}
     })
 
     if is_amt:
-        if qtys_from_desc:
-            btn_list = [types.InlineKeyboardButton(text=f"{q:g}", callback_data=f"setqty_{q}", style="primary") for q in qtys_from_desc]
-            keyboard = chunk_buttons(btn_list, 3)
-            keyboard.append([types.InlineKeyboardButton(text="❌ إلغاء", callback_data="cancel_order", style="danger")])
-            kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
-            try:
-                await cb.message.edit_text(f"🛒 <b>{esc(name)}</b>\nاختر الكمية المطلوبة أدناه:", reply_markup=kb, parse_mode="HTML")
-            except TelegramBadRequest as e:
-                if "message is not modified" not in str(e):
-                    raise e
-            await state.set_state(ClientStates.wait_for_qty)
-            return
-        else:
-            cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
-            await state.set_state(ClientStates.wait_for_qty)
-            await safe_send(cb.from_user.id, f"🛒 <b>{esc(name)}</b>\nأرسل الكمية المطلوبة كتابةً:", reply_markup=cancel_kb)
-            return
+        cancel_kb = types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="🔙 إلغاء الشراء", style="danger")]], resize_keyboard=True)
+        await state.set_state(ClientStates.wait_for_qty)
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        await safe_send(cb.from_user.id, f"🛒 <b>{esc(name)}</b>\n✍️ <b>أرسل الكمية المطلوبة كتابةً:</b>", reply_markup=cancel_kb)
+        return
 
     await state.update_data({"qty": 1, "total": price})
-    await next_buy_step(cb.from_user.id, state)
-
-
-@dp.callback_query(F.data.startswith("setqty_"), ClientStates.wait_for_qty)
-async def select_qty_from_button(cb: types.CallbackQuery, state: FSMContext):
-    try:
-        q = float(cb.data.split("_")[1])
-    except ValueError:
-        return await cb.answer("قيمة غير صالحة.", show_alert=True)
-    d = await state.get_data()
-    total = q * float(d["unit_price"])
-    current_balance = user_init(cb.from_user.id)
-    if current_balance < total:
-        return await cb.answer(f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${total:.4f}", show_alert=True)
-    await safe_answer(cb)
-    await state.update_data({"qty": q, "total": total})
     await next_buy_step(cb.from_user.id, state)
 
 
@@ -1664,19 +1623,18 @@ async def qty(message: types.Message, state: FSMContext):
         await state.clear()
         return await safe_send(message.from_user.id, "❌ تم الإلغاء.", reply_markup=main_kb(message.from_user.id))
     d = await state.get_data()
-    qtys_list = d.get("qtys_list", [])
     try:
         q = float(message.text.strip())
         if q <= 0:
             raise ValueError
     except ValueError:
-        return await safe_send(message.from_user.id, "❌ أرسل رقماً صحيحاً.")
-    if qtys_list and q not in qtys_list:
-        return await safe_send(message.from_user.id, "❌ اختر من الأرقام المحددة فقط!")
+        return await safe_send(message.from_user.id, "❌ أرسل رقماً صحيحاً للكمية.")
+    
     total = q * float(d["unit_price"])
     current_balance = user_init(message.from_user.id)
     if current_balance < total:
         return await safe_send(message.from_user.id, f"❌ ليس لديك رصيد كافٍ!\nرصيدك: ${current_balance:.4f}\nالمطلوب: ${total:.4f}")
+    
     await state.update_data({"qty": q, "total": total})
     await next_buy_step(message.from_user.id, state)
 
@@ -3325,3 +3283,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
