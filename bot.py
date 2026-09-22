@@ -641,6 +641,12 @@ class ClientStates(StatesGroup):
 
 
 # ================= التحقق العام من الحظر =================
+@dp.message(F.text == "🔙 إلغاء الشراء")
+async def cancel_any_action(message: types.Message, state: FSMContext):
+    await state.clear()
+    await safe_send(message.from_user.id, "🏠 تم الإلغاء والعودة للقائمة الرئيسية.", reply_markup=main_kb(message.from_user.id))
+
+
 @dp.message.outer_middleware()
 async def ban_check_middleware(handler, event: types.TelegramObject, data: dict):
     user = getattr(event, "from_user", None)
@@ -779,12 +785,6 @@ async def auto_send_deposits_pdf_task():
                 await bot.send_document(PRIMARY_ADMIN_ID, types.FSInputFile(pdf_file), caption="📊 <b>تقرير تلقائي:</b> ملف PDF يحتوي على سجل جميع عمليات إضافة الرصيد.")
         except Exception as e:
             print(f"⚠️ خطأ إرسال PDF: {e}")
-
-
-@dp.message(F.text == "🔙 إلغاء الشراء")
-async def cancel_any_action(message: types.Message, state: FSMContext):
-    await state.clear()
-    await safe_send(message.from_user.id, "🏠 تم الإلغاء والعودة للقائمة الرئيسية.", reply_markup=main_kb(message.from_user.id))
 
 
 @dp.message(Command("start"))
@@ -1273,7 +1273,7 @@ def build_admin_orders_view(page=1, search_query=None):
     if search_query:
         inline_keyboard.append([types.InlineKeyboardButton(text="🔄 إلغاء التصفية (عرض الكل)", callback_data="admin_orders_page_1", style="danger")])
 
-    kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
     return text, kb
 
 
@@ -1513,7 +1513,7 @@ async def show_product(cb: types.CallbackQuery):
     if available:
         keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"buy_{pid}", style="success")])
     if in_wish:
-        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}", style="danger")])
+        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفة", callback_data=f"delwish_{pid}", style="danger")])
     else:
         keyboard.append([types.InlineKeyboardButton(text="⭐ إضافة للمفضلة", callback_data=f"addwish_{pid}", style="success")])
     if sid:
@@ -1670,7 +1670,7 @@ async def cancel_order(cb: types.CallbackQuery, state: FSMContext):
 
 # ================= تتبع الطلب التلقائي =================
 async def track_single_order(ouuid, uid, oid, amount, name):
-    for attempt in range(1, 702):
+    for attempt in range(1, 5001):
         await asyncio.sleep(30)
         try:
             result = await check_order_api(ouuid)
