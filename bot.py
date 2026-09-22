@@ -1,4 +1,4 @@
-import asyncio
+@SARE3_STOR_Supportimport asyncio
 import html
 import json
 import psycopg2
@@ -1513,7 +1513,7 @@ async def show_product(cb: types.CallbackQuery):
     if available:
         keyboard.append([types.InlineKeyboardButton(text="🛒 شراء الآن", callback_data=f"buy_{pid}", style="success")])
     if in_wish:
-        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفة", callback_data=f"delwish_{pid}", style="danger")])
+        keyboard.append([types.InlineKeyboardButton(text="🗑️ إزالة من المفضلة", callback_data=f"delwish_{pid}", style="danger")])
     else:
         keyboard.append([types.InlineKeyboardButton(text="⭐ إضافة للمفضلة", callback_data=f"addwish_{pid}", style="success")])
     if sid:
@@ -1670,9 +1670,22 @@ async def cancel_order(cb: types.CallbackQuery, state: FSMContext):
 
 # ================= تتبع الطلب التلقائي =================
 async def track_single_order(ouuid, uid, oid, amount, name):
-    for attempt in range(1, 5001):
+    for attempt in range(1, 5801):
         await asyncio.sleep(30)
         try:
+            # التحقق إذا تجاوزت مدة انتظار الطلب 48 ساعة (48 * 3600 ثانية = 5760 محاولة بفارق 30 ثانية)
+            if attempt > 5760:
+                reject_reason = "تم إلغاء الطلب تلقائياً لتجاوزه مهلة التنفيذ (48 ساعة)"
+                if reject_once(oid, uid, amount, reject_reason):
+                    msg = (
+                        f"❌ <b>تم إلغاء طلبك تلقائياً (#{oid})</b>\n"
+                        f"📦 المنتج: <b>{esc(name)}</b>\n"
+                        f"📌 الحالة: <b>مرفوض (تجاوز 48 ساعة) ❌</b>\n"
+                        f"💵 تم إرجاع <b>${float(amount):.4f}</b> إلى حسابك بالكامل."
+                    )
+                    await safe_send(uid, msg)
+                break
+
             result = await check_order_api(ouuid)
             if not result:
                 continue
@@ -2995,7 +3008,7 @@ async def sub_add_start(message: types.Message, state: FSMContext):
         return await safe_send(message.from_user.id, "❌ أضف قسماً أولاً.")
     btn_list = [types.KeyboardButton(text=f"📂 {clean_name(name)}", style="primary") for cid, name in rows]
     keyboard = chunk_buttons(btn_list, 2)
-    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")])
+    keyboard.append([types.KeyboardButton(text="🔙 رجوع للرئيسية", style="danger")] )
     kb = types.ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     await safe_send(message.from_user.id, "اختر القسم:", reply_markup=kb)
     await state.set_state(AdminStates.add_sub_select_cat)
@@ -3283,4 +3296,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
